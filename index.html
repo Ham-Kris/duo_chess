@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Duo Chess</title>
+  <link rel="icon" href="assets/pieces/white-knight.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="game-shell">
+    <section class="game-content">
+      <h1>Duo Chess</h1>
+      <div class="board-wrap">
+        <div class="board" id="board" role="grid" aria-label="国际象棋棋盘"></div>
+      </div>
+
+      <div class="controls" aria-label="对局控制">
+        <div class="status" id="status">白方回合</div>
+      </div>
+    </section>
+    <aside class="side-panel" aria-label="对局设置">
+      <h2>对局设置</h2>
+      <button id="reset" class="text-button reset-button" type="button">重新开始</button>
+      <label class="toggle-row">
+        <span>自动翻转视角</span>
+        <input id="autoFlip" type="checkbox">
+      </label>
+      <button id="flipView" class="text-button flip-button" type="button">反转视角</button>
+      <fieldset class="mode-group">
+        <legend>模式</legend>
+        <label><input type="radio" name="gameMode" value="human" checked> 双人对局</label>
+        <label><input type="radio" name="gameMode" value="ai-black"> AI 执黑</label>
+        <label><input type="radio" name="gameMode" value="ai-white"> AI 执白</label>
+      </fieldset>
+      <div class="engine-status" id="aiStatus">双人对局</div>
+    </aside>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
