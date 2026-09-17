@@ -32,6 +32,9 @@ let halfmoveClock = 0;
 let fullmoveNumber = 1;
 let positionHistory = [];
 let castling = { K: true, Q: true, k: true, q: true };
+let undoStack = [];
+let redoStack = [];
+let aiGeneration = 0;
 const moveSound = new Audio('assets/audio/move.mp3');
 moveSound.preload = 'auto';
 
@@ -39,6 +42,8 @@ const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
 const autoFlipEl = document.getElementById('autoFlip');
 const flipViewEl = document.getElementById('flipView');
+const undoMoveEl = document.getElementById('undoMove');
+const redoMoveEl = document.getElementById('redoMove');
 const modeInputs = [...document.querySelectorAll('input[name="gameMode"]')];
 const aiStatusEl = document.getElementById('aiStatus');
 autoFlip = autoFlipEl.checked;
@@ -57,6 +62,49 @@ function positionKey(state = board, side = turn, rights = castling) {
   return state.map(row => row.map(piece => piece || '.').join('')).join('/') + ' ' + side + ' ' + fenCastling(rights);
 }
 function recordPosition() { positionHistory.push(positionKey()); }
+function cloneMove(move) {
+  if (!move) return null;
+  return {
+    from: move.from.slice(),
+    to: move.to.slice(),
+    rook: move.rook ? { from: move.rook.from.slice(), to: move.rook.to.slice() } : null
+  };
+}
+function snapshotState() {
+  return {
+    board: board.map(row => row.slice()),
+    turn,
+    perspective,
+    lastMove: cloneMove(lastMove),
+    aiError,
+    halfmoveClock,
+    fullmoveNumber,
+    positionHistory: positionHistory.slice(),
+    castling: { ...castling }
+  };
+}
+function restoreState(state) {
+  board = state.board.map(row => row.slice());
+  turn = state.turn;
+  perspective = state.perspective;
+  selected = null;
+  lastMove = cloneMove(state.lastMove);
+  aiBusy = false;
+  aiError = state.aiError;
+  halfmoveClock = state.halfmoveClock;
+  fullmoveNumber = state.fullmoveNumber;
+  positionHistory = state.positionHistory.slice();
+  castling = { ...state.castling };
+}
+function cancelPendingAi() {
+  clearTimeout(aiTimer);
+  aiGeneration += 1;
+  aiBusy = false;
+}
+function updateHistoryButtons() {
+  undoMoveEl.disabled = undoStack.length === 0;
+  redoMoveEl.disabled = redoStack.length === 0;
+}
 function playMoveSound() {
   const sound = moveSound.cloneNode();
   sound.play().catch(() => {});
@@ -190,9 +238,13 @@ function parseUciMove(uci) {
   return { from, to, promotion: uci[4] || null };
 }
 
-function applyMove(from, to, promotion = null) {
+function applyMove(from, to, promotion = null, options = {}) {
   const piece = board[from[0]][from[1]];
   if (!piece) return false;
+  if (options.trackHistory !== false) {
+    undoStack.push(snapshotState());
+    redoStack = [];
+  }
   const captured = board[to[0]][to[1]];
   const isCastle = piece.toLowerCase() === 'k' && Math.abs(to[1] - from[1]) === 2;
   board[to[0]][to[1]] = piece;
@@ -264,6 +316,7 @@ function render() {
     square.addEventListener('click', () => onSquare(r,c)); boardEl.append(square);
   }
   statusEl.textContent = statusText(result);
+  updateHistoryButtons();
   renderAiStatus();
 }
 
@@ -290,6 +343,7 @@ async function scheduleAiMove() {
 
 async function makeAiMove() {
   if (isGameOver() || !isAiTurn() || aiBusy) return;
+  const requestGeneration = aiGeneration;
   aiBusy = true; aiError = ''; selected = null; render();
   try {
     const response = await fetch('/api/bestmove', {
@@ -299,12 +353,14 @@ async function makeAiMove() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Lc0 request failed');
     const parsed = parseUciMove(data.bestmove);
+    if (requestGeneration !== aiGeneration) return;
     if (!parsed) throw new Error(`Invalid bestmove: ${data.bestmove}`);
     const legal = legalMoves(...parsed.from);
     if (!legal.some(([r,c]) => r === parsed.to[0] && c === parsed.to[1])) throw new Error(`Illegal bestmove: ${data.bestmove}`);
     aiBusy = false;
     applyMove(parsed.from, parsed.to, parsed.promotion);
   } catch (error) {
+    if (requestGeneration !== aiGeneration) return;
     aiBusy = false;
     aiError = error.message;
     render();
@@ -312,10 +368,26 @@ async function makeAiMove() {
 }
 
 function resetGame() {
-  clearTimeout(perspectiveTimer); clearTimeout(aiTimer);
+  clearTimeout(perspectiveTimer); cancelPendingAi();
   board = initialBoard(); turn = 'w'; perspective = autoFlip ? 'w' : playerPerspective(); selected = null; lastMove = null; aiBusy = false; aiError = '';
-  halfmoveClock = 0; fullmoveNumber = 1; positionHistory = []; castling = { K: true, Q: true, k: true, q: true }; recordPosition();
+  halfmoveClock = 0; fullmoveNumber = 1; positionHistory = []; castling = { K: true, Q: true, k: true, q: true }; undoStack = []; redoStack = []; recordPosition();
   render(); scheduleAiMove();
+}
+
+function undoMove() {
+  if (!undoStack.length) return;
+  clearTimeout(perspectiveTimer); cancelPendingAi();
+  redoStack.push(snapshotState());
+  restoreState(undoStack.pop());
+  render();
+}
+
+function redoMove() {
+  if (!redoStack.length) return;
+  clearTimeout(perspectiveTimer); cancelPendingAi();
+  undoStack.push(snapshotState());
+  restoreState(redoStack.pop());
+  render();
 }
 
 function flipPerspective() {
@@ -326,8 +398,10 @@ function flipPerspective() {
 
 autoFlipEl.addEventListener('change', () => { autoFlip = autoFlipEl.checked; clearTimeout(perspectiveTimer); perspective = autoFlip ? turn : playerPerspective(); render(); });
 flipViewEl.addEventListener('click', flipPerspective);
-modeInputs.forEach(input => input.addEventListener('change', () => { gameMode = input.value; aiError = ''; selected = null; if (!autoFlip) perspective = playerPerspective(); render(); scheduleAiMove(); }));
+modeInputs.forEach(input => input.addEventListener('change', () => { cancelPendingAi(); gameMode = input.value; aiError = ''; selected = null; if (!autoFlip) perspective = playerPerspective(); render(); scheduleAiMove(); }));
 document.getElementById('reset').addEventListener('click', resetGame);
+undoMoveEl.addEventListener('click', undoMove);
+redoMoveEl.addEventListener('click', redoMove);
 recordPosition();
 render();
 scheduleAiMove();
