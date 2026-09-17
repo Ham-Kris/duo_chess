@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 
 const root = __dirname;
 const port = Number(process.env.PORT || 4173);
+const host = process.env.HOST || '127.0.0.1';
 const authFile = path.resolve(process.env.AUTH_FILE || path.join(root, 'auth.json'));
 const lc0Path = process.env.LC0_PATH || 'lc0';
 const stockfishPath = process.env.STOCKFISH_PATH || 'stockfish';
@@ -326,9 +327,9 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res, urlPath);
 });
 
-server.listen(port, '127.0.0.1', () => {
+server.listen(port, host, () => {
   const actualPort = server.address().port;
-  console.log(`duo_chess running at http://127.0.0.1:${actualPort}/`);
+  console.log(`duo_chess running at http://${host}:${actualPort}/`);
   console.log(`Access protection: ${authConfig ? `enabled (${authConfig.username})` : 'disabled'}`);
   console.log(`UCI engine order: ${engineCandidates.map(engine => `${engine.name} (${engine.command})`).join(' -> ')}`);
 });

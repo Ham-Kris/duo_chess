@@ -22,6 +22,7 @@ node server.js
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PORT` | `4173` | HTTP 端口 |
+| `HOST` | `127.0.0.1` | HTTP 监听地址；直接对外提供服务时可设为 `0.0.0.0` |
 | `AUTH_FILE` | 仓库根目录下的 `auth.json` | 访问账号配置文件路径 |
 | `LC0_PATH` | `lc0` | Lc0 可执行文件路径。未在 `PATH` 里时再设 |
 | `STOCKFISH_PATH` | `stockfish` | Stockfish 可执行文件路径。Lc0 不可用时作为回退 |
@@ -29,10 +30,10 @@ node server.js
 例如：
 
 ```bash
-PORT=4173 LC0_PATH=/opt/homebrew/bin/lc0 STOCKFISH_PATH=/opt/homebrew/bin/stockfish node server.js
+HOST=127.0.0.1 PORT=4173 LC0_PATH=/opt/homebrew/bin/lc0 STOCKFISH_PATH=/opt/homebrew/bin/stockfish node server.js
 ```
 
-服务只监听 `127.0.0.1`。启动成功时终端会打印访问地址和当前 UCI 引擎顺序。默认顺序固定为 Lc0 -> Stockfish。
+服务默认只监听 `127.0.0.1`；设置 `HOST=0.0.0.0` 后可监听所有 IPv4 地址。启动成功时终端会打印访问地址和当前 UCI 引擎顺序。默认顺序固定为 Lc0 -> Stockfish。
 
 不要直接用 `file://` 打开 `index.html`：走子声音、静态资源和 `/api/bestmove` 都依赖这个本地服务。
 

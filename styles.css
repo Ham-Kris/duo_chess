@@ -1,9 +1,3 @@
-@font-face {
-  font-family: DuoSans;
-  src: url("Duolingo - The world’s most popular way to learn_files/f2331bbfd902cdf8971c4d3184a44283.woff2") format("woff2");
-  font-weight: 400 800;
-}
-
 :root {
   color-scheme: dark light;
   --ink: #f2f7f9;
@@ -48,7 +42,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: DuoSans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 button { font: inherit; }

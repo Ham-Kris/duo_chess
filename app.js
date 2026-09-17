@@ -374,7 +374,7 @@ function render() {
 function renderAiStatus() {
   if (gameMode === 'human') aiStatusEl.textContent = '双人对局';
   else if (aiBusy) aiStatusEl.textContent = 'AI 正在思考';
-  else aiStatusEl.textContent = aiError || 'AI 待命（优先 Lc0）';
+  else aiStatusEl.textContent = aiError || 'AI 待命';
 }
 
 function onSquare(r,c) {
