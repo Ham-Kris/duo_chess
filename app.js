@@ -46,9 +46,60 @@ const undoMoveEl = document.getElementById('undoMove');
 const redoMoveEl = document.getElementById('redoMove');
 const modeInputs = [...document.querySelectorAll('input[name="gameMode"]')];
 const aiStatusEl = document.getElementById('aiStatus');
+const accountSetupEl = document.getElementById('accountSetup');
+const accountActiveEl = document.getElementById('accountActive');
+const accountUsernameEl = document.getElementById('accountUsername');
+const accountPasswordEl = document.getElementById('accountPassword');
+const saveAccountEl = document.getElementById('saveAccount');
+const currentUsernameEl = document.getElementById('currentUsername');
+const logoutEl = document.getElementById('logout');
+const accountMessageEl = document.getElementById('accountMessage');
 autoFlip = autoFlipEl.checked;
 gameMode = modeInputs.find(input => input.checked)?.value || 'human';
 perspective = gameMode === 'ai-white' ? 'b' : 'w';
+
+async function loadAuthStatus() {
+  try {
+    const response = await fetch('/api/auth/status', { cache: 'no-store' });
+    const data = await response.json();
+    accountSetupEl.hidden = data.configured;
+    accountActiveEl.hidden = !data.configured;
+    currentUsernameEl.textContent = data.username || '';
+    accountMessageEl.textContent = data.configured ? '密码访问已启用' : '尚未设置，当前可直接访问';
+  } catch {
+    accountMessageEl.textContent = '无法读取访问保护状态';
+  }
+}
+
+accountSetupEl.addEventListener('submit', async event => {
+  event.preventDefault();
+  accountMessageEl.textContent = '';
+  saveAccountEl.disabled = true;
+  try {
+    const response = await fetch('/api/auth/setup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: accountUsernameEl.value, password: accountPasswordEl.value })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '设置失败');
+    accountPasswordEl.value = '';
+    await loadAuthStatus();
+  } catch (error) {
+    accountMessageEl.textContent = error.message;
+  } finally {
+    saveAccountEl.disabled = false;
+  }
+});
+
+logoutEl.addEventListener('click', async () => {
+  logoutEl.disabled = true;
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } finally {
+    location.replace('/login');
+  }
+});
 
 function colorOf(piece) { return piece && piece === piece.toUpperCase() ? 'w' : 'b'; }
 function inBounds(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
@@ -322,8 +373,8 @@ function render() {
 
 function renderAiStatus() {
   if (gameMode === 'human') aiStatusEl.textContent = '双人对局';
-  else if (aiBusy) aiStatusEl.textContent = 'Lc0 正在思考';
-  else aiStatusEl.textContent = aiError || 'Lc0 待命';
+  else if (aiBusy) aiStatusEl.textContent = 'AI 正在思考';
+  else aiStatusEl.textContent = aiError || 'AI 待命（优先 Lc0）';
 }
 
 function onSquare(r,c) {
@@ -351,7 +402,7 @@ async function makeAiMove() {
       body: JSON.stringify({ fen: boardToFen(), movetime: 800 })
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Lc0 request failed');
+    if (!response.ok) throw new Error(data.error || 'AI request failed');
     const parsed = parseUciMove(data.bestmove);
     if (requestGeneration !== aiGeneration) return;
     if (!parsed) throw new Error(`Invalid bestmove: ${data.bestmove}`);
@@ -405,3 +456,4 @@ redoMoveEl.addEventListener('click', redoMove);
 recordPosition();
 render();
 scheduleAiMove();
+loadAuthStatus();

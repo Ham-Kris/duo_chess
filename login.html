@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · Duo Chess</title>
+  <style>
+    :root { color-scheme: dark light; --ink: #f2f7f9; --muted: #9aaab0; --bg: #111c20; --line: #35444a; --accent: #58cc02; }
+    @media (prefers-color-scheme: light) { :root { --ink: #4b4b4b; --muted: #777d80; --bg: #fff; --line: #e1e5e7; } }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(360px, 100%); }
+    h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: 0; }
+    p { margin: 0 0 24px; color: var(--muted); font-weight: 600; }
+    form { display: grid; gap: 10px; }
+    label { color: var(--muted); font-size: 13px; font-weight: 700; }
+    input, button { width: 100%; height: 46px; border-radius: 8px; font: inherit; }
+    input { border: 2px solid var(--line); padding: 0 12px; background: transparent; color: var(--ink); outline: none; }
+    input:focus { border-color: var(--accent); }
+    button { margin-top: 8px; border: 0; background: var(--accent); color: #102000; cursor: pointer; font-weight: 800; }
+    button:disabled { opacity: .55; cursor: wait; }
+    #message { min-height: 20px; margin-top: 12px; color: #ff6b6b; font-size: 13px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Duo Chess</h1>
+    <p>请输入访问账号和密码。</p>
+    <form id="loginForm">
+      <label for="username">账号</label>
+      <input id="username" name="username" type="text" maxlength="64" autocomplete="username" required autofocus>
+      <label for="password">密码</label>
+      <input id="password" name="password" type="password" maxlength="256" autocomplete="current-password" required>
+      <button id="submit" type="submit">登录</button>
+    </form>
+    <div id="message" role="alert"></div>
+  </main>
+  <script>
+    const form = document.getElementById('loginForm');
+    const submit = document.getElementById('submit');
+    const message = document.getElementById('message');
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      submit.disabled = true;
+      message.textContent = '';
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username: form.username.value, password: form.password.value })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '登录失败');
+        location.replace('/');
+      } catch (error) {
+        message.textContent = error.message;
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

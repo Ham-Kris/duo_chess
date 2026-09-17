@@ -38,6 +38,21 @@
         <label><input type="radio" name="gameMode" value="ai-white"> AI 执白</label>
       </fieldset>
       <div class="engine-status" id="aiStatus">双人对局</div>
+      <section class="account-settings" aria-labelledby="accountTitle">
+        <h3 id="accountTitle">访问保护</h3>
+        <form id="accountSetup" hidden>
+          <label class="field-label" for="accountUsername">账号</label>
+          <input id="accountUsername" class="text-input" type="text" maxlength="64" autocomplete="username">
+          <label class="field-label" for="accountPassword">密码</label>
+          <input id="accountPassword" class="text-input" type="password" minlength="8" maxlength="256" autocomplete="new-password">
+          <button id="saveAccount" class="text-button account-button" type="submit">启用密码访问</button>
+        </form>
+        <div id="accountActive" hidden>
+          <p class="account-summary">当前账号：<strong id="currentUsername"></strong></p>
+          <button id="logout" class="text-button account-button" type="button">退出登录</button>
+        </div>
+        <div class="account-message" id="accountMessage" role="status"></div>
+      </section>
     </aside>
   </main>
   <script src="app.js"></script>
