@@ -5,14 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Duo Chess</title>
   <link rel="icon" href="assets/pieces/white-knight.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260929-1">
 </head>
 <body>
   <main class="game-shell">
     <section class="game-content">
       <h1>Duo Chess</h1>
       <div class="board-wrap">
-        <div class="board" id="board" role="grid" aria-label="国际象棋棋盘"></div>
+        <div class="board-surface">
+          <div class="board" id="board" role="grid" aria-label="国际象棋棋盘"></div>
+          <svg id="boardOverlay" class="board-overlay" viewBox="0 0 800 800" aria-hidden="true"></svg>
+        </div>
       </div>
 
       <div class="controls" aria-label="对局控制">
@@ -22,8 +25,16 @@
     <aside class="side-panel" aria-label="对局设置">
       <h2>对局设置</h2>
       <div class="history-controls" aria-label="棋步历史">
-        <button id="undoMove" class="icon-button" type="button" aria-label="撤销一步" title="撤销一步" disabled>↶</button>
-        <button id="redoMove" class="icon-button" type="button" aria-label="重做一步" title="重做一步" disabled>↷</button>
+        <button id="undoMove" class="icon-button" type="button" aria-label="撤销一步" title="撤销一步" disabled>
+          <svg class="history-icon" viewBox="0 0 1170 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M811.008 271.945143H147.675429l198.656-198.509714A43.154286 43.154286 0 0 0 285.257143 12.653714L12.653714 285.037714a43.008 43.008 0 0 0 0 60.928l272.749715 272.310857a43.154286 43.154286 0 0 0 61.074285-60.928L150.308571 361.764571h660.553143a269.458286 269.458286 0 1 1 0 538.916572H226.962286a44.982857 44.982857 0 1 0 0 89.965714h583.899428c198.509714 0 359.424-160.914286 359.424-359.424a359.277714 359.277714 0 0 0-359.277714-359.277714z"/>
+          </svg>
+        </button>
+        <button id="redoMove" class="icon-button" type="button" aria-label="重做一步" title="重做一步" disabled>
+          <svg class="history-icon history-icon--redo" viewBox="0 0 1170 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M811.008 271.945143H147.675429l198.656-198.509714A43.154286 43.154286 0 0 0 285.257143 12.653714L12.653714 285.037714a43.008 43.008 0 0 0 0 60.928l272.749715 272.310857a43.154286 43.154286 0 0 0 61.074285-60.928L150.308571 361.764571h660.553143a269.458286 269.458286 0 1 1 0 538.916572H226.962286a44.982857 44.982857 0 1 0 0 89.965714h583.899428c198.509714 0 359.424-160.914286 359.424-359.424a359.277714 359.277714 0 0 0-359.277714-359.277714z"/>
+          </svg>
+        </button>
       </div>
       <button id="reset" class="text-button reset-button" type="button">重新开始</button>
       <label class="toggle-row">
@@ -31,13 +42,14 @@
         <input id="autoFlip" type="checkbox">
       </label>
       <button id="flipView" class="text-button flip-button" type="button">反转视角</button>
-      <fieldset class="mode-group">
-        <legend>模式</legend>
-        <label><input type="radio" name="gameMode" value="human" checked> 双人对局</label>
-        <label><input type="radio" name="gameMode" value="ai-black"> AI 执黑</label>
-        <label><input type="radio" name="gameMode" value="ai-white"> AI 执白</label>
-      </fieldset>
-      <div class="engine-status" id="aiStatus">双人对局</div>
+      <section class="assistance" aria-labelledby="assistanceTitle">
+        <h3 id="assistanceTitle">AI 辅助对局</h3>
+        <div id="suggestions" aria-live="polite"></div>
+        <div class="engine-status" id="aiStatus" role="status">等待分析</div>
+        <button id="retryAnalysis" class="text-button" type="button" hidden>重试分析</button>
+        <label class="toggle-row attack-toggle"><span class="white-attack-label">白方攻击线</span><input id="whiteAttacks" type="checkbox" checked></label>
+        <label class="toggle-row attack-toggle"><span class="black-attack-label">黑方攻击线</span><input id="blackAttacks" type="checkbox" checked></label>
+      </section>
       <section class="account-settings" aria-labelledby="accountTitle">
         <h3 id="accountTitle">访问保护</h3>
         <form id="accountSetup" hidden>
@@ -55,6 +67,9 @@
       </section>
     </aside>
   </main>
-  <script src="app.js"></script>
+  <div id="promotionPopover" class="promotion-popover" popover="auto" aria-label="选择升变棋子">
+    <div id="promotionChoices" class="promotion-choices"></div>
+  </div>
+  <script type="module" src="app.js?v=20260929-1"></script>
 </body>
 </html>

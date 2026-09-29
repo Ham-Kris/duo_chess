@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+const chessModule = import('./assets/vendor/chess.mjs');
 
 const root = __dirname;
 const port = Number(process.env.PORT || 4173);
@@ -22,6 +23,7 @@ const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.woff2': 'font/woff2',
@@ -143,14 +145,14 @@ function normalizeMovetime(movetime) {
   return Math.max(100, Math.min(5000, Number(movetime) || 800));
 }
 
-function runUciEngine(candidate, fen, movetime) {
+function runUciEngine(candidate, fen, movetime, signal, searchMoves = []) {
   return new Promise((resolve, reject) => {
     const engine = spawn(candidate.command, [], { stdio: ['pipe', 'pipe', 'pipe'] });
-    let output = '';
+    let buffer = '';
     let stderr = '';
     let settled = false;
-    let uciOk = false;
-    let searchStarted = false;
+    const linesByDepth = new Map();
+    const multiPv = Math.min(4, Math.max(2, searchMoves.length || 2));
     const safeMovetime = normalizeMovetime(movetime);
     const timeout = setTimeout(() => {
       fail(new Error(`${candidate.name} timed out`));
@@ -158,7 +160,12 @@ function runUciEngine(candidate, fen, movetime) {
 
     function cleanup() {
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
       engine.kill();
+    }
+
+    function onAbort() {
+      fail(new Error('分析请求已取消'));
     }
 
     function fail(error) {
@@ -172,28 +179,57 @@ function runUciEngine(candidate, fen, movetime) {
       if (settled) return;
       settled = true;
       cleanup();
-      resolve(bestmove);
+      const complete = [...linesByDepth.entries()]
+        .sort(([a], [b]) => b - a)
+        .map(([, moves]) => moves)
+        .find(moves => moves.has(1));
+      const suggestions = [{ rank: 1, move: bestmove }];
+      if (complete) {
+        for (const rank of [...complete.keys()].sort((a, b) => a - b)) {
+          const move = complete.get(rank);
+          if (rank !== 1 && move !== bestmove && !suggestions.some(item => item.move === move)) {
+            suggestions.push({ rank, move });
+          }
+        }
+      }
+      resolve({ move: bestmove, suggestions });
     }
 
     function send(command) {
       engine.stdin.write(`${command}\n`);
     }
 
-    engine.stdout.on('data', chunk => {
-      output += chunk.toString();
-      if (!uciOk && /(?:^|\n)uciok(?:\r?\n|$)/.test(output)) {
-        uciOk = true;
+    function readLine(line) {
+      if (line === 'uciok') {
+        send(`setoption name MultiPV value ${multiPv}`);
         send('isready');
-      }
-      if (!searchStarted && /(?:^|\n)readyok(?:\r?\n|$)/.test(output)) {
-        searchStarted = true;
+      } else if (line === 'readyok') {
         send('ucinewgame');
         send(`position fen ${fen}`);
-        send(`go movetime ${safeMovetime}`);
+        const restriction = searchMoves.length ? ` searchmoves ${searchMoves.join(' ')}` : '';
+        send(`go movetime ${safeMovetime}${restriction}`);
+      } else if (line.startsWith('info ')) {
+        const depth = line.match(/\bdepth\s+(\d+)/);
+        const multipv = line.match(/\bmultipv\s+(\d+)\b/);
+        const pv = line.match(/\bpv\s+([a-h][1-8][a-h][1-8][qrbn]?)\b/);
+        if (depth && multipv && pv) {
+          const level = Number(depth[1]);
+          if (!linesByDepth.has(level)) linesByDepth.set(level, new Map());
+          linesByDepth.get(level).set(Number(multipv[1]), pv[1]);
+        }
+      } else if (line.startsWith('bestmove ')) {
+        const move = line.match(/^bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/)?.[1];
+        if (move) succeed(move);
+        else fail(new Error(`${candidate.name} returned an invalid bestmove`));
       }
-      const match = output.match(/(?:^|\n)bestmove\s+(\S+)/);
-      if (match) {
-        succeed(match[1]);
+    }
+
+    engine.stdout.on('data', chunk => {
+      buffer += chunk.toString();
+      let newline;
+      while (!settled && (newline = buffer.indexOf('\n')) !== -1) {
+        readLine(buffer.slice(0, newline).trim());
+        buffer = buffer.slice(newline + 1);
       }
     });
     engine.stderr.on('data', chunk => { stderr += chunk.toString(); });
@@ -201,22 +237,26 @@ function runUciEngine(candidate, fen, movetime) {
       fail(new Error(error.code === 'ENOENT' ? candidate.missingHint : error.message));
     });
     engine.on('close', code => {
-      if (!settled && !output.includes('bestmove')) {
+      if (!settled) {
         fail(new Error(stderr.trim() || `${candidate.name} exited with code ${code}`));
       }
     });
+
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     send('uci');
   });
 }
 
-async function bestMove(fen, movetime = 800) {
+async function bestMove(fen, movetime = 800, signal, searchMoves = []) {
   const errors = [];
   for (const candidate of engineCandidates) {
     try {
-      const move = await runUciEngine(candidate, fen, movetime);
-      return { move, engine: candidate.name };
+      const result = await runUciEngine(candidate, fen, movetime, signal, searchMoves);
+      return { ...result, engine: candidate.name };
     } catch (error) {
+      if (signal?.aborted) throw error;
       errors.push(`${candidate.name}: ${error.message}`);
     }
   }
@@ -314,12 +354,25 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && urlPath === '/api/bestmove') {
+    const abortController = new AbortController();
+    req.on('aborted', () => abortController.abort());
+    res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
     try {
-      const { fen, movetime } = await readJson(req);
-      if (typeof fen !== 'string' || !fen.includes(' ')) return sendJson(res, 400, { error: 'Invalid FEN' });
-      const { move, engine } = await bestMove(fen, movetime);
-      return sendJson(res, 200, { bestmove: move, engine });
+      const { fen, movetime, searchmoves } = await readJson(req);
+      if (typeof fen !== 'string') return sendJson(res, 400, { error: 'Invalid FEN' });
+      let chess;
+      try { chess = new (await chessModule).Chess(fen); }
+      catch { return sendJson(res, 400, { error: 'Invalid FEN' }); }
+      const legalMoves = new Set(chess.moves({ verbose: true }).map(move => `${move.from}${move.to}${move.promotion || ''}`));
+      const restrictedMoves = Array.isArray(searchmoves)
+        ? [...new Set(searchmoves.filter(move => typeof move === 'string' && legalMoves.has(move)))]
+        : [];
+      if (Array.isArray(searchmoves) && restrictedMoves.length === 0) return sendJson(res, 400, { error: '没有合法的候选着法' });
+      const { move, suggestions, engine } = await bestMove(fen, movetime, abortController.signal, restrictedMoves);
+      if (abortController.signal.aborted) return;
+      return sendJson(res, 200, { bestmove: move, suggestions, engine });
     } catch (error) {
+      if (abortController.signal.aborted) return;
       return sendJson(res, 500, { error: error.message });
     }
   }

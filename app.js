@@ -1,62 +1,42 @@
-const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-const pieceNames = { p: 'pawn', r: 'rook', n: 'knight', b: 'bishop', q: 'queen', k: 'king' };
-const whiteFiles = {
-  p: 'assets/pieces/white-pawn.svg', r: 'assets/pieces/white-rook.svg', n: 'assets/pieces/white-knight.svg',
-  b: 'assets/pieces/white-bishop.svg', q: 'assets/pieces/white-queen.svg', k: 'assets/pieces/white-king.svg'
-};
-const blackFiles = {
-  p: 'assets/pieces/black-pawn.svg', r: 'assets/pieces/black-rook.svg', n: 'assets/pieces/black-knight.svg',
-  b: 'assets/pieces/black-bishop.svg', q: 'assets/pieces/black-queen.svg', k: 'assets/pieces/black-king.svg'
-};
-const checkedFiles = { w: 'assets/pieces/white-king-checked.svg', b: 'assets/pieces/black-king-checked.svg' };
-const checkmatedFiles = { w: 'assets/pieces/white-king-checkmated.svg', b: 'assets/pieces/black-king-checkmated.svg' };
+import { Chess, SQUARES } from './assets/vendor/chess.mjs';
 
-const initialBoard = () => [
-  ['r','n','b','q','k','b','n','r'],
-  Array(8).fill('p'), Array(8).fill(null), Array(8).fill(null), Array(8).fill(null), Array(8).fill(null),
-  Array(8).fill('P'), ['R','N','B','Q','K','B','N','R']
-];
-
-let board = initialBoard();
-let turn = 'w';
+const files = 'abcdefgh';
+const pieceNames = { p: '兵', r: '车', n: '马', b: '象', q: '后', k: '王' };
+const pieceImage = (color, type) => `assets/pieces/${color === 'w' ? 'white' : 'black'}-${{ p: 'pawn', r: 'rook', n: 'knight', b: 'bishop', q: 'queen', k: 'king' }[type]}.svg`;
+const game = new Chess();
 let perspective = 'w';
 let selected = null;
-let lastMove = null;
-let perspectiveTimer = null;
-let aiTimer = null;
-let autoFlip = true;
-let gameMode = 'human';
+let hovered = null;
+let perspectiveTimer;
+let analysisTimer;
+let controller;
+let generation = 0;
+let suggestions = [];
 let aiBusy = false;
 let aiError = '';
-let halfmoveClock = 0;
-let fullmoveNumber = 1;
-let positionHistory = [];
-let castling = { K: true, Q: true, k: true, q: true };
-let undoStack = [];
-let redoStack = [];
-let aiGeneration = 0;
+let engineName = '';
+let pendingPromotion = null;
+let promotionRecommendation = null;
+let promotionController = null;
+const redoStack = [];
 const moveSound = new Audio('assets/audio/move.mp3');
 moveSound.preload = 'auto';
-
-const boardEl = document.getElementById('board');
-const statusEl = document.getElementById('status');
-const autoFlipEl = document.getElementById('autoFlip');
-const flipViewEl = document.getElementById('flipView');
-const undoMoveEl = document.getElementById('undoMove');
-const redoMoveEl = document.getElementById('redoMove');
-const modeInputs = [...document.querySelectorAll('input[name="gameMode"]')];
-const aiStatusEl = document.getElementById('aiStatus');
-const accountSetupEl = document.getElementById('accountSetup');
-const accountActiveEl = document.getElementById('accountActive');
-const accountUsernameEl = document.getElementById('accountUsername');
-const accountPasswordEl = document.getElementById('accountPassword');
-const saveAccountEl = document.getElementById('saveAccount');
-const currentUsernameEl = document.getElementById('currentUsername');
-const logoutEl = document.getElementById('logout');
-const accountMessageEl = document.getElementById('accountMessage');
-autoFlip = autoFlipEl.checked;
-gameMode = modeInputs.find(input => input.checked)?.value || 'human';
-perspective = gameMode === 'ai-white' ? 'b' : 'w';
+const $ = id => document.getElementById(id);
+const boardEl = $('board');
+const overlayEl = $('boardOverlay');
+const promotionPopover = $('promotionPopover');
+const autoFlipEl = $('autoFlip');
+const undoMoveEl = $('undoMove');
+const redoMoveEl = $('redoMove');
+const aiStatusEl = $('aiStatus');
+const accountSetupEl = $('accountSetup');
+const accountActiveEl = $('accountActive');
+const accountUsernameEl = $('accountUsername');
+const accountPasswordEl = $('accountPassword');
+const saveAccountEl = $('saveAccount');
+const currentUsernameEl = $('currentUsername');
+const logoutEl = $('logout');
+const accountMessageEl = $('accountMessage');
 
 async function loadAuthStatus() {
   try {
@@ -65,7 +45,6 @@ async function loadAuthStatus() {
     accountSetupEl.hidden = data.configured;
     accountActiveEl.hidden = !data.configured;
     currentUsernameEl.textContent = data.username || '';
-    accountMessageEl.textContent = data.configured ? '密码访问已启用' : '尚未设置，当前可直接访问';
   } catch {
     accountMessageEl.textContent = '无法读取访问保护状态';
   }
@@ -91,369 +70,386 @@ accountSetupEl.addEventListener('submit', async event => {
     saveAccountEl.disabled = false;
   }
 });
-
 logoutEl.addEventListener('click', async () => {
   logoutEl.disabled = true;
-  try {
-    await fetch('/api/auth/logout', { method: 'POST' });
-  } finally {
-    location.replace('/login');
-  }
+  try { await fetch('/api/auth/logout', { method: 'POST' }); }
+  finally { location.replace('/login'); }
 });
 
-function colorOf(piece) { return piece && piece === piece.toUpperCase() ? 'w' : 'b'; }
-function inBounds(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
-function isAiTurn() { return gameMode === 'ai-black' && turn === 'b' || gameMode === 'ai-white' && turn === 'w'; }
-function playerPerspective() { return gameMode === 'ai-white' ? 'b' : 'w'; }
-function fenCastling(rights = castling) {
-  const text = `${rights.K ? 'K' : ''}${rights.Q ? 'Q' : ''}${rights.k ? 'k' : ''}${rights.q ? 'q' : ''}`;
-  return text || '-';
-}
-function positionKey(state = board, side = turn, rights = castling) {
-  return state.map(row => row.map(piece => piece || '.').join('')).join('/') + ' ' + side + ' ' + fenCastling(rights);
-}
-function recordPosition() { positionHistory.push(positionKey()); }
-function cloneMove(move) {
-  if (!move) return null;
-  return {
-    from: move.from.slice(),
-    to: move.to.slice(),
-    rook: move.rook ? { from: move.rook.from.slice(), to: move.rook.to.slice() } : null
-  };
-}
-function snapshotState() {
-  return {
-    board: board.map(row => row.slice()),
-    turn,
-    perspective,
-    lastMove: cloneMove(lastMove),
-    aiError,
-    halfmoveClock,
-    fullmoveNumber,
-    positionHistory: positionHistory.slice(),
-    castling: { ...castling }
-  };
-}
-function restoreState(state) {
-  board = state.board.map(row => row.slice());
-  turn = state.turn;
-  perspective = state.perspective;
-  selected = null;
-  lastMove = cloneMove(state.lastMove);
-  aiBusy = false;
-  aiError = state.aiError;
-  halfmoveClock = state.halfmoveClock;
-  fullmoveNumber = state.fullmoveNumber;
-  positionHistory = state.positionHistory.slice();
-  castling = { ...state.castling };
-}
-function cancelPendingAi() {
-  clearTimeout(aiTimer);
-  aiGeneration += 1;
-  aiBusy = false;
-}
-function updateHistoryButtons() {
-  undoMoveEl.disabled = undoStack.length === 0;
-  redoMoveEl.disabled = redoStack.length === 0;
-}
-function playMoveSound() {
-  const sound = moveSound.cloneNode();
-  sound.play().catch(() => {});
-}
-function hasLegalMoves() {
-  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) if (legalMoves(r, c).length) return true;
-  return false;
-}
-function insufficientMaterial() {
-  const pieces = [];
-  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
-    const piece = board[r][c];
-    if (piece && piece.toLowerCase() !== 'k') pieces.push({ type: piece.toLowerCase(), color: (r + c) % 2 });
-  }
-  if (!pieces.length) return true;
-  if (pieces.length === 1 && (pieces[0].type === 'n' || pieces[0].type === 'b')) return true;
-  return pieces.length === 2 && pieces.every(piece => piece.type === 'b') && pieces[0].color === pieces[1].color;
-}
-function getOutcome() {
-  const check = inCheck(turn);
-  const movable = hasLegalMoves();
-  if (!movable) return { type: check ? 'checkmate' : 'stalemate', check, movable, winner: check ? (turn === 'w' ? 'b' : 'w') : null };
-  if (insufficientMaterial()) return { type: 'insufficient', check, movable };
-  if (positionHistory.filter(key => key === positionKey()).length >= 3) return { type: 'repetition', check, movable };
-  if (halfmoveClock >= 100) return { type: 'fifty', check, movable };
-  return { type: 'playing', check, movable };
-}
-function isGameOver(result = getOutcome()) { return result.type !== 'playing'; }
-function statusText(result) {
-  if (result.type === 'checkmate') return `${result.winner === 'w' ? '白方' : '黑方'}将死`;
-  if (result.type === 'stalemate') return '和棋（逼和）';
-  if (result.type === 'insufficient') return '和棋（子力不足）';
-  if (result.type === 'repetition') return '和棋（三次重复）';
-  if (result.type === 'fifty') return '和棋（五十步规则）';
-  if (result.check) return `${turn === 'w' ? '白方' : '黑方'}被将军`;
-  return `${turn === 'w' ? '白方' : '黑方'}回合`;
-}
-
-function pseudoMoves(r, c, state = board) {
-  const piece = state[r][c]; if (!piece) return [];
-  const type = piece.toLowerCase(); const color = colorOf(piece); const moves = [];
-  const add = (rr, cc) => { if (!inBounds(rr, cc)) return false; const target = state[rr][cc]; if (!target) { moves.push([rr,cc]); return true; } if (colorOf(target) !== color) moves.push([rr,cc]); return false; };
-  if (type === 'p') {
-    const dir = color === 'w' ? -1 : 1; const start = color === 'w' ? 6 : 1;
-    if (inBounds(r+dir,c) && !state[r+dir][c]) { moves.push([r+dir,c]); if (r === start && !state[r+2*dir][c]) moves.push([r+2*dir,c]); }
-    for (const dc of [-1,1]) if (inBounds(r+dir,c+dc) && state[r+dir][c+dc] && colorOf(state[r+dir][c+dc]) !== color) moves.push([r+dir,c+dc]);
-  } else if (type === 'n') {
-    [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]].forEach(([dr,dc]) => { if (inBounds(r+dr,c+dc) && (!state[r+dr][c+dc] || colorOf(state[r+dr][c+dc]) !== color)) moves.push([r+dr,c+dc]); });
-  } else if (type === 'k') {
-    for (let dr=-1; dr<=1; dr++) for (let dc=-1; dc<=1; dc++) if ((dr || dc) && inBounds(r+dr,c+dc) && (!state[r+dr][c+dc] || colorOf(state[r+dr][c+dc]) !== color)) moves.push([r+dr,c+dc]);
-  } else {
-    const dirs = type === 'b' ? [[-1,-1],[-1,1],[1,-1],[1,1]] : type === 'r' ? [[-1,0],[1,0],[0,-1],[0,1]] : [[-1,-1],[-1,1],[1,-1],[1,1],[-1,0],[1,0],[0,-1],[0,1]];
-    dirs.forEach(([dr,dc]) => { let rr=r+dr, cc=c+dc; while (add(rr,cc)) { rr += dr; cc += dc; } });
-  }
-  return moves;
-}
-
-function attacked(r, c, byColor, state = board) {
-  for (let rr=0; rr<8; rr++) for (let cc=0; cc<8; cc++) if (state[rr][cc] && colorOf(state[rr][cc]) === byColor) {
-    const type = state[rr][cc].toLowerCase();
-    if (type === 'p') { const dir = byColor === 'w' ? -1 : 1; if (r === rr+dir && Math.abs(c-cc) === 1) return true; }
-    else if (type === 'k') { if (Math.max(Math.abs(r-rr), Math.abs(c-cc)) === 1) return true; }
-    else if (pseudoMoves(rr,cc,state).some(([mr,mc]) => mr === r && mc === c)) return true;
-  }
-  return false;
-}
-
-function inCheck(color, state = board) {
-  let king = null;
-  for (let r=0; r<8; r++) for (let c=0; c<8; c++) if (state[r][c] === (color === 'w' ? 'K' : 'k')) king = [r,c];
-  return !king || attacked(king[0], king[1], color === 'w' ? 'b' : 'w', state);
-}
-
-function legalMoves(r, c) {
-  const piece = board[r][c]; if (!piece || colorOf(piece) !== turn) return [];
-  const moves = pseudoMoves(r,c).filter(([rr,cc]) => { const next = board.map(row => row.slice()); next[rr][cc] = next[r][c]; next[r][c] = null; return !inCheck(turn, next); });
-  if (piece.toLowerCase() === 'k') {
-    for (const [rr, cc] of castlingMoves(turn)) {
-      if (!moves.some(([mr, mc]) => mr === rr && mc === cc)) moves.push([rr, cc]);
-    }
-  }
-  return moves;
-}
-
-function castlingMoves(color) {
-  const moves = [];
-  if (inCheck(color)) return moves;
-  const row = color === 'w' ? 7 : 0;
-  const enemy = color === 'w' ? 'b' : 'w';
-  const rook = color === 'w' ? 'R' : 'r';
-  const kingSide = color === 'w' ? castling.K : castling.k;
-  const queenSide = color === 'w' ? castling.Q : castling.q;
-  if (kingSide && board[row][4] === (color === 'w' ? 'K' : 'k') && board[row][7] === rook && !board[row][5] && !board[row][6]) {
-    if (!attacked(row, 5, enemy) && !attacked(row, 6, enemy)) moves.push([row, 6]);
-  }
-  if (queenSide && board[row][4] === (color === 'w' ? 'K' : 'k') && board[row][0] === rook && !board[row][1] && !board[row][2] && !board[row][3]) {
-    if (!attacked(row, 3, enemy) && !attacked(row, 2, enemy)) moves.push([row, 2]);
-  }
-  return moves;
-}
-
-function updateCastlingRights(from, to, piece) {
-  if (piece === 'K') { castling.K = false; castling.Q = false; }
-  if (piece === 'k') { castling.k = false; castling.q = false; }
-  if (from[0] === 7 && from[1] === 7) castling.K = false;
-  if (from[0] === 7 && from[1] === 0) castling.Q = false;
-  if (from[0] === 0 && from[1] === 7) castling.k = false;
-  if (from[0] === 0 && from[1] === 0) castling.q = false;
-  if (to[0] === 7 && to[1] === 7) castling.K = false;
-  if (to[0] === 7 && to[1] === 0) castling.Q = false;
-  if (to[0] === 0 && to[1] === 7) castling.k = false;
-  if (to[0] === 0 && to[1] === 0) castling.q = false;
-}
-
-function boardToFen() {
-  const rows = board.map(row => {
-    let out = ''; let empty = 0;
-    for (const piece of row) {
-      if (!piece) empty++;
-      else { if (empty) out += empty; empty = 0; out += piece; }
-    }
-    return out + (empty || '');
-  });
-  return `${rows.join('/')} ${turn} ${fenCastling()} - ${halfmoveClock} ${fullmoveNumber}`;
-}
-
-function parseUciMove(uci) {
-  if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) return null;
-  const from = [8 - Number(uci[1]), files.indexOf(uci[0])];
-  const to = [8 - Number(uci[3]), files.indexOf(uci[2])];
-  return { from, to, promotion: uci[4] || null };
-}
-
-function applyMove(from, to, promotion = null, options = {}) {
-  const piece = board[from[0]][from[1]];
-  if (!piece) return false;
-  if (options.trackHistory !== false) {
-    undoStack.push(snapshotState());
-    redoStack = [];
-  }
-  const captured = board[to[0]][to[1]];
-  const isCastle = piece.toLowerCase() === 'k' && Math.abs(to[1] - from[1]) === 2;
-  board[to[0]][to[1]] = piece;
-  board[from[0]][from[1]] = null;
-  let rookMove = null;
-  if (isCastle) {
-    const row = from[0];
-    if (to[1] === 6) { rookMove = { from: [row, 7], to: [row, 5] }; }
-    else if (to[1] === 2) { rookMove = { from: [row, 0], to: [row, 3] }; }
-    if (rookMove) {
-      board[rookMove.to[0]][rookMove.to[1]] = board[rookMove.from[0]][rookMove.from[1]];
-      board[rookMove.from[0]][rookMove.from[1]] = null;
-    }
-  }
-  if (piece.toLowerCase() === 'p' && (to[0] === 0 || to[0] === 7)) board[to[0]][to[1]] = colorOf(piece) === 'w' ? (promotion || 'q').toUpperCase() : (promotion || 'q');
-  updateCastlingRights(from, to, piece);
-  halfmoveClock = piece.toLowerCase() === 'p' || captured ? 0 : halfmoveClock + 1;
-  if (turn === 'b') fullmoveNumber += 1;
-  lastMove = { from, to, rook: rookMove };
-  turn = turn === 'w' ? 'b' : 'w';
-  selected = null;
-  recordPosition();
-  playMoveSound();
-  render();
-  if (isGameOver()) return true;
-  schedulePerspective();
-  scheduleAiMove();
-  return true;
-}
-
-function move(from, to) { return applyMove(from, to); }
-
-function schedulePerspective() {
-  clearTimeout(perspectiveTimer);
-  if (!autoFlip) return;
-  const nextPerspective = turn;
-  perspectiveTimer = setTimeout(() => { if (turn !== nextPerspective) return; perspective = nextPerspective; render(); }, 1000);
+function statusText() {
+  const side = game.turn() === 'w' ? '白方' : '黑方';
+  if (game.isCheckmate()) return `${game.turn() === 'w' ? '黑方' : '白方'}将死`;
+  if (game.isStalemate()) return '和棋（逼和）';
+  if (game.isInsufficientMaterial()) return '和棋（子力不足）';
+  if (game.isThreefoldRepetition()) return '和棋（三次重复）';
+  if (game.isDrawByFiftyMoves()) return '和棋（五十步规则）';
+  return side + (game.inCheck() ? '被将军' : '回合');
 }
 
 function render() {
-  boardEl.innerHTML = '';
-  const result = getOutcome();
-  const legal = selected && result.type === 'playing' ? legalMoves(...selected) : [];
-  const check = result.check;
-  const checkmate = result.type === 'checkmate';
-  const viewOrder = perspective === 'b' ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
-  for (let viewR = 0; viewR < 8; viewR++) for (let viewC = 0; viewC < 8; viewC++) {
-    const r = viewOrder[viewR];
-    const c = viewOrder[viewC];
-    const square = document.createElement('button'); square.className = `square ${(r+c)%2 ? 'light' : 'dark'}`; square.type = 'button'; square.setAttribute('role','gridcell');
-    if (selected && selected[0] === r && selected[1] === c) square.classList.add('selected');
-    if (lastMove && ((lastMove.from[0] === r && lastMove.from[1] === c) || (lastMove.to[0] === r && lastMove.to[1] === c))) square.classList.add('last-move');
-    if (lastMove?.rook && ((lastMove.rook.from[0] === r && lastMove.rook.from[1] === c) || (lastMove.rook.to[0] === r && lastMove.rook.to[1] === c))) square.classList.add('last-move');
-    const target = legal.find(([rr,cc]) => rr === r && cc === c); if (target) { square.classList.add('legal'); if (board[r][c]) square.classList.add('capture'); }
-    const piece = board[r][c];
+  const focusedSquare = document.activeElement?.dataset.square;
+  const legal = selected && !game.isGameOver() ? game.moves({ square: selected, verbose: true }) : [];
+  const last = game.history({ verbose: true }).at(-1);
+  const lastSquares = last ? [last.from, last.to] : [];
+  if (last?.isKingsideCastle()) lastSquares.push(last.color === 'w' ? 'h1' : 'h8', last.color === 'w' ? 'f1' : 'f8');
+  if (last?.isQueensideCastle()) lastSquares.push(last.color === 'w' ? 'a1' : 'a8', last.color === 'w' ? 'd1' : 'd8');
+  const order = perspective === 'w' ? [...SQUARES] : [...SQUARES].reverse();
+  boardEl.replaceChildren();
+  order.forEach((squareName, index) => {
+    const piece = game.get(squareName);
+    const square = document.createElement('button');
+    const rank = Number(squareName[1]);
+    square.className = `square ${(files.indexOf(squareName[0]) + rank) % 2 ? 'light' : 'dark'}`;
+    square.type = 'button';
+    square.dataset.square = squareName;
+    square.setAttribute('role', 'gridcell');
+    square.setAttribute('aria-label', squareName + (piece ? ` ${piece.color === 'w' ? '白' : '黑'}${pieceNames[piece.type]}` : ' 空格'));
+    square.classList.toggle('selected', selected === squareName);
+    square.setAttribute('aria-selected', String(selected === squareName));
+    square.classList.toggle('last-move', lastSquares.includes(squareName));
+    const target = legal.find(move => move.to === squareName);
+    if (target) {
+      square.classList.add('legal');
+      square.classList.toggle('capture', target.isCapture() || target.isEnPassant());
+    }
     if (piece) {
-      const pieceColor = colorOf(piece);
-      const isCheckedKing = piece.toLowerCase() === 'k' && pieceColor === turn && check;
+      const checked = piece.type === 'k' && piece.color === game.turn() && game.inCheck();
       const img = document.createElement('img');
-      img.className = `piece${isCheckedKing && !checkmate ? ' king-checked' : ''}`;
-      img.alt = `${pieceColor === 'w' ? '白' : '黑'}${pieceNames[piece.toLowerCase()]}${isCheckedKing ? (checkmate ? ' 将死' : ' 被将军') : ''}`;
-      img.src = isCheckedKing
-        ? (checkmate ? checkmatedFiles[pieceColor] : checkedFiles[pieceColor])
-        : (pieceColor === 'w' ? whiteFiles : blackFiles)[piece.toLowerCase()];
+      img.className = 'piece' + (checked && !game.isCheckmate() ? ' king-checked' : '');
+      img.alt = '';
+      img.src = checked ? `assets/pieces/${piece.color === 'w' ? 'white' : 'black'}-king-${game.isCheckmate() ? 'checkmated' : 'checked'}.svg` : pieceImage(piece.color, piece.type);
       square.append(img);
     }
-    if (viewC === 0) { const label = document.createElement('span'); label.className = 'rank-label'; label.textContent = 8-r; square.append(label); }
-    if (viewR === 7) { const label = document.createElement('span'); label.className = 'file-label'; label.textContent = files[c]; square.append(label); }
-    square.addEventListener('click', () => onSquare(r,c)); boardEl.append(square);
+    if (index % 8 === 0) {
+      const label = document.createElement('span');
+      label.className = 'rank-label';
+      label.textContent = squareName[1];
+      square.append(label);
+    }
+    if (index >= 56) {
+      const label = document.createElement('span');
+      label.className = 'file-label';
+      label.textContent = squareName[0];
+      square.append(label);
+    }
+    square.addEventListener('click', () => onSquare(squareName));
+    square.addEventListener('pointerenter', () => { hovered = piece ? squareName : null; renderOverlay(); });
+    square.addEventListener('pointerleave', () => { hovered = null; renderOverlay(); });
+    square.addEventListener('focus', () => { hovered = piece ? squareName : null; renderOverlay(); });
+    square.addEventListener('blur', () => { hovered = null; renderOverlay(); });
+    boardEl.append(square);
+  });
+  if (focusedSquare) boardEl.querySelector(`[data-square="${focusedSquare}"]`)?.focus({ preventScroll: true });
+  $('status').textContent = statusText();
+  undoMoveEl.disabled = game.history().length === 0;
+  redoMoveEl.disabled = redoStack.length === 0;
+  renderAnalysis();
+  renderOverlay();
+}
+
+function svgElement(tag, attributes) {
+  const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+  return element;
+}
+function center(square) {
+  const column = files.indexOf(square[0]);
+  const row = 8 - Number(square[1]);
+  return perspective === 'w' ? [(column + .5) * 100, (row + .5) * 100] : [(7.5 - column) * 100, (7.5 - row) * 100];
+}
+function renderOverlay() {
+  overlayEl.replaceChildren();
+  const focus = hovered || selected;
+  for (const color of ['w', 'b']) {
+    if (!$(color === 'w' ? 'whiteAttacks' : 'blackAttacks').checked) continue;
+    const group = svgElement('g', { class: `attack-group attack-${color}` });
+    for (const to of SQUARES) for (const from of game.attackers(to, color)) {
+      const [x1, y1] = center(from);
+      const [x2, y2] = center(to);
+      group.append(svgElement('line', {
+        x1, y1, x2, y2, 'data-from': from, 'data-to': to,
+        class: `attack-line${focus === from ? ' highlighted' : focus ? ' dimmed' : ''}`
+      }));
+      group.append(svgElement('circle', { cx: x2, cy: y2, r: 5, class: `attack-point${focus === from ? ' highlighted' : focus ? ' dimmed' : ''}` }));
+    }
+    overlayEl.append(group);
   }
-  statusEl.textContent = statusText(result);
-  updateHistoryButtons();
-  renderAiStatus();
+  const defs = svgElement('defs', {});
+  for (const rank of [1, 2]) {
+    const marker = svgElement('marker', { id: `recommend-arrow-${rank}`, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 3, markerHeight: 3, orient: 'auto-start-reverse' });
+    marker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: `recommend-fill recommend-${rank}` }));
+    defs.append(marker);
+  }
+  overlayEl.append(defs);
+  suggestions.forEach(({ rank, move }) => {
+    const [x1, y1] = center(move.slice(0, 2));
+    const [x2, y2] = center(move.slice(2, 4));
+    const sameDestination = suggestions.length === 2 && suggestions[0].move.slice(2, 4) === suggestions[1].move.slice(2, 4);
+    const badgeX = sameDestination ? x2 + (rank === 1 ? -22 : 22) : x2 + 27;
+    overlayEl.append(svgElement('line', { x1, y1, x2, y2, class: `recommend-line recommend-${rank}`, 'marker-end': `url(#recommend-arrow-${rank})` }));
+    const badge = svgElement('g', { class: `recommend-badge recommend-${rank}` });
+    badge.append(svgElement('circle', { cx: badgeX, cy: y2 - 27, r: 14 }));
+    const label = svgElement('text', { x: badgeX, y: y2 - 27, 'dominant-baseline': 'central', 'text-anchor': 'middle' });
+    label.textContent = rank;
+    badge.append(label);
+    overlayEl.append(badge);
+  });
 }
 
-function renderAiStatus() {
-  if (gameMode === 'human') aiStatusEl.textContent = '双人对局';
-  else if (aiBusy) aiStatusEl.textContent = 'AI 正在思考';
-  else aiStatusEl.textContent = aiError || 'AI 待命';
+function renderAnalysis() {
+  aiStatusEl.textContent = aiError || (game.isGameOver() ? '对局结束' : aiBusy ? 'AI 正在分析' : engineName ? `${engineName} · 分析完成` : '等待分析');
+  $('retryAnalysis').hidden = !aiError;
+  const list = $('suggestions');
+  list.replaceChildren();
+  for (const rank of [1, 2]) {
+    const candidate = suggestions.find(item => item.rank === rank);
+    const row = document.createElement('div');
+    row.className = `suggestion suggestion-${rank}`;
+    const title = document.createElement('strong');
+    title.textContent = rank === 1 ? '1 最优' : '2 次优';
+    const text = document.createElement('span');
+    text.textContent = candidate ? `${candidate.move.slice(0, 2)} → ${candidate.move.slice(2, 4)}${candidate.move[4] ? `，升${pieceNames[candidate.move[4]]}` : ''}` : aiBusy ? '分析中' : '不可用';
+    row.append(title, text);
+    list.append(row);
+  }
 }
 
-function onSquare(r,c) {
-  if (isGameOver() || isAiTurn() || aiBusy) return;
-  const piece = board[r][c];
-  if (!selected) { if (piece && colorOf(piece) === turn) { selected = [r,c]; render(); } return; }
-  const legal = legalMoves(...selected);
-  if (legal.some(([rr,cc]) => rr === r && cc === c)) move(selected, [r,c]);
-  else if (piece && colorOf(piece) === turn) { selected = [r,c]; render(); } else { selected = null; render(); }
+function cancelAnalysis() {
+  clearTimeout(analysisTimer);
+  generation++;
+  controller?.abort();
+  controller = null;
+  aiBusy = false;
+  aiError = '';
+  suggestions = [];
 }
-
-async function scheduleAiMove() {
-  clearTimeout(aiTimer);
-  if (isGameOver() || !isAiTurn()) return;
-  aiTimer = setTimeout(makeAiMove, 500);
+function scheduleAnalysis() {
+  cancelAnalysis();
+  if (!game.isGameOver()) {
+    aiBusy = true;
+    analysisTimer = setTimeout(analyze, 150);
+  }
+  renderAnalysis();
+  renderOverlay();
 }
-
-async function makeAiMove() {
-  if (isGameOver() || !isAiTurn() || aiBusy) return;
-  const requestGeneration = aiGeneration;
-  aiBusy = true; aiError = ''; selected = null; render();
+async function analyze() {
+  const requestGeneration = generation;
+  const fen = game.fen();
+  const requestController = new AbortController();
+  controller = requestController;
   try {
     const response = await fetch('/api/bestmove', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fen: boardToFen(), movetime: 800 })
+      body: JSON.stringify({ fen, movetime: 800 }), signal: requestController.signal
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'AI request failed');
-    const parsed = parseUciMove(data.bestmove);
-    if (requestGeneration !== aiGeneration) return;
-    if (!parsed) throw new Error(`Invalid bestmove: ${data.bestmove}`);
-    const legal = legalMoves(...parsed.from);
-    if (!legal.some(([r,c]) => r === parsed.to[0] && c === parsed.to[1])) throw new Error(`Illegal bestmove: ${data.bestmove}`);
-    aiBusy = false;
-    applyMove(parsed.from, parsed.to, parsed.promotion);
+    if (requestGeneration !== generation || fen !== game.fen()) return;
+    if (!response.ok) throw new Error(data.error || '分析失败');
+    const legal = new Set(game.moves({ verbose: true }).map(move => move.from + move.to + (move.promotion || '')));
+    const seen = new Set();
+    const ranks = new Set();
+    suggestions = (Array.isArray(data.suggestions) ? data.suggestions : []).filter(item => {
+      if (!item || ![1, 2].includes(item.rank) || !legal.has(item.move) || seen.has(item.move) || ranks.has(item.rank)) return false;
+      seen.add(item.move);
+      ranks.add(item.rank);
+      return true;
+    }).sort((a, b) => a.rank - b.rank);
+    if (!suggestions.some(item => item.rank === 1) && legal.has(data.bestmove)) suggestions = [{ rank: 1, move: data.bestmove }];
+    if (!suggestions.some(item => item.rank === 1)) throw new Error('引擎没有返回合法推荐');
+    engineName = data.engine;
   } catch (error) {
-    if (requestGeneration !== aiGeneration) return;
-    aiBusy = false;
+    if (requestGeneration !== generation || error.name === 'AbortError') return;
     aiError = error.message;
-    render();
+  } finally {
+    if (requestGeneration === generation) {
+      aiBusy = false;
+      controller = null;
+      renderAnalysis();
+      renderOverlay();
+    }
   }
 }
 
-function resetGame() {
-  clearTimeout(perspectiveTimer); cancelPendingAi();
-  board = initialBoard(); turn = 'w'; perspective = autoFlip ? 'w' : playerPerspective(); selected = null; lastMove = null; aiBusy = false; aiError = '';
-  halfmoveClock = 0; fullmoveNumber = 1; positionHistory = []; castling = { K: true, Q: true, k: true, q: true }; undoStack = []; redoStack = []; recordPosition();
-  render(); scheduleAiMove();
-}
-
-function undoMove() {
-  if (!undoStack.length) return;
-  clearTimeout(perspectiveTimer); cancelPendingAi();
-  redoStack.push(snapshotState());
-  restoreState(undoStack.pop());
-  render();
-}
-
-function redoMove() {
-  if (!redoStack.length) return;
-  clearTimeout(perspectiveTimer); cancelPendingAi();
-  undoStack.push(snapshotState());
-  restoreState(redoStack.pop());
-  render();
-}
-
-function flipPerspective() {
+function schedulePerspective() {
   clearTimeout(perspectiveTimer);
-  perspective = perspective === 'b' ? 'w' : 'b';
-  render();
+  if (autoFlipEl.checked && !game.isGameOver()) {
+    const turn = game.turn();
+    perspectiveTimer = setTimeout(() => { if (game.turn() === turn) { perspective = turn; render(); } }, 1000);
+  }
 }
-
-autoFlipEl.addEventListener('change', () => { autoFlip = autoFlipEl.checked; clearTimeout(perspectiveTimer); perspective = autoFlip ? turn : playerPerspective(); render(); });
-flipViewEl.addEventListener('click', flipPerspective);
-modeInputs.forEach(input => input.addEventListener('change', () => { cancelPendingAi(); gameMode = input.value; aiError = ''; selected = null; if (!autoFlip) perspective = playerPerspective(); render(); scheduleAiMove(); }));
-document.getElementById('reset').addEventListener('click', resetGame);
-undoMoveEl.addEventListener('click', undoMove);
-redoMoveEl.addEventListener('click', redoMove);
-recordPosition();
+function commitMove(move) {
+  game.move(move);
+  redoStack.length = 0;
+  selected = hovered = null;
+  moveSound.cloneNode().play().catch(() => {});
+  scheduleAnalysis();
+  render();
+  schedulePerspective();
+}
+function onSquare(square) {
+  if (game.isGameOver() || pendingPromotion) return;
+  const piece = game.get(square);
+  const candidates = selected ? game.moves({ square: selected, verbose: true }).filter(move => move.to === square) : [];
+  if (candidates.length) {
+    if (candidates.some(move => move.promotion)) openPromotion(selected, square);
+    else commitMove({ from: selected, to: square });
+  } else {
+    selected = piece?.color === game.turn() && selected !== square ? square : null;
+    render();
+  }
+}
+function openPromotion(from, to) {
+  clearTimeout(perspectiveTimer);
+  pendingPromotion = { from, to };
+  promotionRecommendation = null;
+  const choices = $('promotionChoices');
+  choices.replaceChildren();
+  for (const type of ['q', 'r', 'b', 'n']) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'promotion-choice';
+    button.dataset.promotion = type;
+    button.setAttribute('aria-label', `升变为${pieceNames[type]}`);
+    const image = document.createElement('img');
+    image.src = pieceImage(game.turn(), type);
+    image.alt = '';
+    button.append(image);
+    button.addEventListener('click', () => choosePromotion(type));
+    choices.append(button);
+  }
+  const target = boardEl.querySelector(`[data-square="${to}"]`);
+  const rect = target?.getBoundingClientRect();
+  if (rect) {
+    const width = 248;
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2));
+    const top = rect.bottom + 8 + 96 < window.innerHeight ? rect.bottom + 8 : rect.top - 104;
+    promotionPopover.style.left = `${left}px`;
+    promotionPopover.style.top = `${Math.max(8, top)}px`;
+  }
+  promotionPopover.showPopover();
+  choices.firstElementChild.focus();
+  analyzePromotion(from, to);
+}
+function cancelPromotion() {
+  pendingPromotion = null;
+  promotionController?.abort();
+  promotionController = null;
+  promotionRecommendation = null;
+  if (promotionPopover.matches(':popover-open')) promotionPopover.hidePopover();
+  render();
+  if (selected) boardEl.querySelector(`[data-square="${selected}"]`)?.focus();
+}
+function choosePromotion(promotion) {
+  if (!pendingPromotion) return;
+  const move = { ...pendingPromotion, promotion };
+  pendingPromotion = null;
+  promotionController?.abort();
+  promotionController = null;
+  if (promotionPopover.matches(':popover-open')) promotionPopover.hidePopover();
+  commitMove(move);
+}
+async function analyzePromotion(from, to) {
+  const moves = game.moves({ square: from, verbose: true })
+    .filter(move => move.to === to && move.promotion)
+    .map(move => `${move.from}${move.to}${move.promotion}`);
+  if (!moves.length) return;
+  promotionController?.abort();
+  const requestController = new AbortController();
+  promotionController = requestController;
+  try {
+    const response = await fetch('/api/bestmove', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fen: game.fen(), movetime: 800, searchmoves: moves }),
+      signal: requestController.signal
+    });
+    const data = await response.json();
+    if (!pendingPromotion || pendingPromotion.from !== from || pendingPromotion.to !== to) return;
+    if (!response.ok) throw new Error(data.error || '升变分析失败');
+    const best = data.suggestions?.find(item => item.rank === 1)?.move || data.bestmove;
+    promotionRecommendation = moves.includes(best) ? best[4] : null;
+    renderPromotionChoices();
+  } catch (error) {
+    if (error.name !== 'AbortError') promotionRecommendation = null;
+  } finally {
+    if (promotionController === requestController) promotionController = null;
+  }
+}
+function renderPromotionChoices() {
+  for (const button of $('promotionChoices').children) {
+    button.classList.toggle('recommended', button.dataset.promotion === promotionRecommendation);
+    button.setAttribute('aria-label', button.dataset.promotion === promotionRecommendation
+      ? `AI推荐升变为${pieceNames[button.dataset.promotion]}`
+      : `升变为${pieceNames[button.dataset.promotion]}`);
+  }
+}
+promotionPopover.addEventListener('toggle', event => {
+  if (event.newState === 'closed' && pendingPromotion) {
+    pendingPromotion = null;
+    promotionController?.abort();
+    promotionController = null;
+    promotionRecommendation = null;
+    render();
+  }
+});
+promotionPopover.addEventListener('keydown', event => {
+  const buttons = [...$('promotionChoices').children];
+  const index = buttons.indexOf(document.activeElement);
+  if (['q', 'r', 'b', 'n'].includes(event.key.toLowerCase())) {
+    event.preventDefault();
+    choosePromotion(event.key.toLowerCase());
+    return;
+  }
+  if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? 3 : (index + (event.key === 'ArrowRight' ? 1 : 3)) % 4;
+    buttons[next].focus();
+  }
+});
+undoMoveEl.addEventListener('click', () => {
+  if (pendingPromotion) cancelPromotion();
+  const move = game.undo();
+  if (!move) return;
+  redoStack.push({ from: move.from, to: move.to, ...(move.promotion ? { promotion: move.promotion } : {}) });
+  clearTimeout(perspectiveTimer);
+  selected = hovered = null;
+  if (autoFlipEl.checked) perspective = game.turn();
+  scheduleAnalysis();
+  render();
+});
+redoMoveEl.addEventListener('click', () => {
+  const move = redoStack.pop();
+  if (!move) return;
+  game.move(move);
+  clearTimeout(perspectiveTimer);
+  selected = hovered = null;
+  if (autoFlipEl.checked) perspective = game.turn();
+  scheduleAnalysis();
+  render();
+});
+$('reset').addEventListener('click', () => {
+  cancelPromotion();
+  clearTimeout(perspectiveTimer);
+  game.reset();
+  selected = hovered = null;
+  redoStack.length = 0;
+  perspective = 'w';
+  scheduleAnalysis();
+  render();
+});
+$('flipView').addEventListener('click', () => {
+  clearTimeout(perspectiveTimer);
+  perspective = perspective === 'w' ? 'b' : 'w';
+  hovered = null;
+  render();
+});
+autoFlipEl.addEventListener('change', () => {
+  clearTimeout(perspectiveTimer);
+  if (autoFlipEl.checked) perspective = game.turn();
+  render();
+});
+for (const id of ['whiteAttacks', 'blackAttacks']) $(id).addEventListener('change', renderOverlay);
+$('retryAnalysis').addEventListener('click', scheduleAnalysis);
+window.addEventListener('pagehide', cancelAnalysis);
 render();
-scheduleAiMove();
+scheduleAnalysis();
 loadAuthStatus();
