@@ -162,15 +162,19 @@ function renderOverlay() {
   const focus = hovered || selected;
   for (const color of ['w', 'b']) {
     if (!$(color === 'w' ? 'whiteAttacks' : 'blackAttacks').checked) continue;
-    const group = svgElement('g', { class: `attack-group attack-${color}` });
-    for (const to of SQUARES) for (const from of game.attackers(to, color)) {
-      const [x1, y1] = center(from);
-      const [x2, y2] = center(to);
-      group.append(svgElement('line', {
-        x1, y1, x2, y2, 'data-from': from, 'data-to': to,
-        class: `attack-line${focus === from ? ' highlighted' : focus ? ' dimmed' : ''}`
-      }));
-      group.append(svgElement('circle', { cx: x2, cy: y2, r: 5, class: `attack-point${focus === from ? ' highlighted' : focus ? ' dimmed' : ''}` }));
+    const group = svgElement('g', { class: `attack-group attack-${color}`, 'aria-hidden': 'true' });
+    for (const to of SQUARES) {
+      const isProtect = game.get(to)?.color === color;
+      for (const from of game.attackers(to, color)) {
+        const [x1, y1] = center(from);
+        const [x2, y2] = center(to);
+        const tone = focus === from || (!focus && isProtect) ? ' highlighted' : focus ? ' dimmed' : '';
+        group.append(svgElement('line', {
+          x1, y1, x2, y2, 'data-from': from, 'data-to': to,
+          class: `attack-line${tone}`
+        }));
+        group.append(svgElement('circle', { cx: x2, cy: y2, r: 5, class: `attack-point${tone}` }));
+      }
     }
     overlayEl.append(group);
   }
@@ -185,13 +189,29 @@ function renderOverlay() {
     const [x1, y1] = center(move.slice(0, 2));
     const [x2, y2] = center(move.slice(2, 4));
     const sameDestination = suggestions.length === 2 && suggestions[0].move.slice(2, 4) === suggestions[1].move.slice(2, 4);
-    const badgeX = sameDestination ? x2 + (rank === 1 ? -22 : 22) : x2 + 27;
+    let badgeX = sameDestination ? x2 + (rank === 1 ? -22 : 22) : x2 + 27;
+    let badgeY = y2 - 27;
+    if (badgeX > 782) badgeX = x2 - 27;
+    if (badgeX < 18) badgeX = x2 + 27;
+    if (badgeY < 18) badgeY = y2 + 27;
+    if (badgeY > 782) badgeY = y2 - 27;
     overlayEl.append(svgElement('line', { x1, y1, x2, y2, class: `recommend-line recommend-${rank}`, 'marker-end': `url(#recommend-arrow-${rank})` }));
-    const badge = svgElement('g', { class: `recommend-badge recommend-${rank}` });
-    badge.append(svgElement('circle', { cx: badgeX, cy: y2 - 27, r: 14 }));
-    const label = svgElement('text', { x: badgeX, y: y2 - 27, 'dominant-baseline': 'central', 'text-anchor': 'middle' });
+    const badge = svgElement('g', {
+      class: `recommend-badge recommend-${rank}`,
+      role: 'button',
+      tabindex: '0',
+      'aria-label': `应用${rank === 1 ? '最优' : '次优'} ${move.slice(0, 2)} → ${move.slice(2, 4)}${move[4] ? `，升${pieceNames[move[4]]}` : ''}`
+    });
+    badge.append(svgElement('circle', { class: 'recommend-badge-hit', cx: badgeX, cy: badgeY, r: 22 }));
+    badge.append(svgElement('circle', { cx: badgeX, cy: badgeY, r: 14 }));
+    const label = svgElement('text', { x: badgeX, y: badgeY, 'dominant-baseline': 'central', 'text-anchor': 'middle' });
     label.textContent = rank;
     badge.append(label);
+    const apply = event => { event.preventDefault(); event.stopPropagation(); applyUci(move); };
+    badge.addEventListener('click', apply);
+    badge.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') apply(event);
+    });
     overlayEl.append(badge);
   });
 }
@@ -276,6 +296,17 @@ function schedulePerspective() {
     const turn = game.turn();
     perspectiveTimer = setTimeout(() => { if (game.turn() === turn) { perspective = turn; render(); } }, 1000);
   }
+}
+function applyUci(uci) {
+  if (!uci || game.isGameOver() || pendingPromotion) return;
+  const from = uci.slice(0, 2);
+  const to = uci.slice(2, 4);
+  const promotion = uci[4];
+  const legal = game.moves({ verbose: true }).find(move =>
+    move.from === from && move.to === to && (move.promotion || '') === (promotion || '')
+  );
+  if (!legal) return;
+  commitMove(promotion ? { from, to, promotion } : { from, to });
 }
 function commitMove(move) {
   game.move(move);

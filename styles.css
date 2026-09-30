@@ -46,13 +46,15 @@ body {
 }
 
 button { font: inherit; }
-.game-shell { min-height: 100vh; max-width: 1030px; margin: auto; padding: 28px 24px 38px; display: grid; grid-template-columns: minmax(0, 680px) 250px; gap: 24px; align-items: start; }
-.game-content { width: 100%; min-width: 0; }
+.game-shell { min-height: 100vh; width: 100%; margin: 0; padding: 28px 24px 38px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 650px) minmax(0, 1fr); column-gap: 24px; align-items: center; }
+.game-content { grid-column: 2; width: 100%; min-width: 0; }
 h1 { margin: 0 0 28px 14px; font-size: 34px; letter-spacing: 0; }
 .side-panel {
   position: relative;
-  width: 100%;
-  margin: 68px 0 0;
+  grid-column: 3;
+  justify-self: end;
+  width: 250px;
+  margin: 0;
   border: 2px solid var(--line);
   border-radius: 14px;
   padding: 16px;
@@ -130,7 +132,11 @@ h1 { margin: 0 0 28px 14px; font-size: 34px; letter-spacing: 0; }
 @media (prefers-color-scheme: light) {
   :root { --white-attack: #1478b9; --black-attack: #ba386e; --best: #328300; --second: #996600; }
 }
-.board-overlay { position: absolute; inset: 3px; width: calc(100% - 6px); height: calc(100% - 6px); pointer-events: none; z-index: 2; }
+.board-overlay { position: absolute; inset: 3px; width: calc(100% - 6px); height: calc(100% - 6px); pointer-events: none; z-index: 2; overflow: visible; }
+.recommend-badge { pointer-events: auto; cursor: pointer; }
+.recommend-badge:focus { outline: none; }
+.recommend-badge:hover circle:not(.recommend-badge-hit),
+.recommend-badge:focus-visible circle:not(.recommend-badge-hit) { filter: brightness(1.08); }
 .attack-w { color: var(--white-attack); }
 .attack-b { color: var(--black-attack); }
 .attack-line { stroke: currentColor; stroke-width: 1.7; opacity: .24; }
@@ -144,7 +150,8 @@ h1 { margin: 0 0 28px 14px; font-size: 34px; letter-spacing: 0; }
 .recommend-line { stroke: currentColor; stroke-width: 7; opacity: .9; }
 .recommend-2.recommend-line { stroke-dasharray: 12 6; }
 .recommend-fill { fill: currentColor; }
-.recommend-badge circle { fill: currentColor; stroke: var(--bg); stroke-width: 2; }
+.recommend-badge circle { fill: currentColor; stroke: none; }
+.recommend-badge circle.recommend-badge-hit { fill: none; stroke: none; }
 .recommend-badge text { fill: var(--bg); font: bold 18px sans-serif; }
 .assistance { margin-top: 22px; }
 .assistance h3 { font-size: 16px; margin: 0 0 12px; }
@@ -171,8 +178,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .board { box-shadow: 0 4px 0 var(--board-shadow), 0 14px 30px rgba(31, 45, 51, .08); }
 }
 
-@media (max-width: 800px) {
+@media (max-width: 980px) {
   .game-shell { padding: 16px 10px 28px; display: block; }
+  .game-content { width: min(650px, 100%); margin: auto; }
   h1 { margin-left: 8px; margin-bottom: 18px; }
   .side-panel { position: static; width: 100%; margin: 18px 0 0; }
   .board-wrap { padding: 0; }
