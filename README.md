@@ -37,6 +37,29 @@ HOST=127.0.0.1 PORT=4173 LC0_PATH=/opt/homebrew/bin/lc0 STOCKFISH_PATH=/opt/home
 
 不要直接用 `file://` 打开 `index.html`：走子声音、静态资源和 `/api/bestmove` 都依赖这个本地服务。
 
+## 一键部署到 FS
+
+在本地仓库执行（会部署当前文件，包括未提交的修改）：
+
+```bash
+bash deploy.sh
+```
+
+默认使用 SSH 配置中的 `FS`，也可执行 `bash deploy.sh SSH_HOST` 指定主机。
+SSH 采用交互式连接，关闭 agent forwarding；需要时请完成 1Password 授权。
+
+脚本针对已配置好的 Linux/systemd 服务器：目标为 `/www/wwwroot/duo_chess`，
+服务为 `duo-chess.service`，端口为 `8900`。需要 root、Node.js 18+、curl、
+tar 和 flock。缺少 `/usr/games/stockfish` 时通过 apt 安装 Stockfish。
+现有服务须配置 `PORT=8900`、`STOCKFISH_PATH=/usr/games/stockfish` 和
+`AUTH_FILE=/var/lib/duo-chess/auth.json`。
+
+部署前运行认证测试，只上传应用文件和资源；账号密码文件保持原位。
+旧版本保留在 `/www/wwwroot/duo_chess.backup-*`。重启后检查本机认证状态和
+`https://chess.pathwit.com/login`；失败时恢复旧版本并重启服务，失败版本保留在
+`/www/wwwroot/duo_chess.failed-*` 供排查。回滚只恢复应用，不卸载已安装的 Stockfish。
+重启会清除内存中的登录会话，需要重新登录。脚本不配置反向代理或首次创建 systemd 服务。
+
 ## 访问保护
 
 首次启动时没有 `auth.json`，网页可以直接访问。在右侧「访问保护」中设置账号和至少 8 位密码后，服务会创建 `auth.json`；之后访问网页和业务 API 都必须先登录。

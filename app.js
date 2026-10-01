@@ -168,7 +168,7 @@ function renderOverlay() {
       for (const from of game.attackers(to, color)) {
         const [x1, y1] = center(from);
         const [x2, y2] = center(to);
-        const tone = focus === from || (!focus && isProtect) ? ' highlighted' : focus ? ' dimmed' : '';
+        const tone = focus === from || focus === to || (!focus && isProtect) ? ' highlighted' : focus ? ' dimmed' : '';
         group.append(svgElement('line', {
           x1, y1, x2, y2, 'data-from': from, 'data-to': to,
           class: `attack-line${tone}`
