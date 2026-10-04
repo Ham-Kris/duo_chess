@@ -7,14 +7,14 @@ const game = new Chess();
 let perspective = 'w';
 let selected = null;
 let hovered = null;
-let perspectiveTimer;
 let analysisTimer;
 let controller;
 let generation = 0;
 let suggestions = [];
 let aiBusy = false;
 let aiError = '';
-let engineName = '';
+let evaluation = null;
+let drawMode = false;
 let pendingPromotion = null;
 let promotionRecommendation = null;
 let promotionController = null;
@@ -25,10 +25,11 @@ const $ = id => document.getElementById(id);
 const boardEl = $('board');
 const overlayEl = $('boardOverlay');
 const promotionPopover = $('promotionPopover');
-const autoFlipEl = $('autoFlip');
 const undoMoveEl = $('undoMove');
 const redoMoveEl = $('redoMove');
-const aiStatusEl = $('aiStatus');
+const winRateEl = $('winRate');
+const preferDrawEl = $('preferDraw');
+const preferDrawLabelEl = $('preferDrawLabel');
 const accountSetupEl = $('accountSetup');
 const accountActiveEl = $('accountActive');
 const accountUsernameEl = $('accountUsername');
@@ -160,7 +161,13 @@ function center(square) {
 function renderOverlay() {
   overlayEl.replaceChildren();
   const focus = hovered || selected;
+  const stalemateColor = game.isStalemate() ? (game.turn() === 'w' ? 'b' : 'w') : null;
+  // Stalemate has no legal moves, so use chess.js's pseudo-legal targets to explain the blocked options.
+  const stalemateTargets = stalemateColor
+    ? new Set(game._moves({ legal: false }).map(move => `${files[move.to & 7]}${8 - (move.to >> 4)}`))
+    : null;
   for (const color of ['w', 'b']) {
+    if (stalemateColor) continue;
     if (!$(color === 'w' ? 'whiteAttacks' : 'blackAttacks').checked) continue;
     const group = svgElement('g', { class: `attack-group attack-${color}`, 'aria-hidden': 'true' });
     for (const to of SQUARES) {
@@ -179,12 +186,39 @@ function renderOverlay() {
     overlayEl.append(group);
   }
   const defs = svgElement('defs', {});
+  const stalemateMarker = svgElement('marker', { id: 'stalemate-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 3.5, markerHeight: 3.5, orient: 'auto' });
+  stalemateMarker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: 'stalemate-fill' }));
+  defs.append(stalemateMarker);
   for (const rank of [1, 2]) {
     const marker = svgElement('marker', { id: `recommend-arrow-${rank}`, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 3, markerHeight: 3, orient: 'auto-start-reverse' });
     marker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: `recommend-fill recommend-${rank}` }));
     defs.append(marker);
   }
   overlayEl.append(defs);
+  if (stalemateColor) {
+    const group = svgElement('g', { class: 'stalemate-attacks', 'aria-hidden': 'true' });
+    const arrows = [];
+    for (const to of stalemateTargets) for (const from of game.attackers(to, stalemateColor)) {
+      const [x1, y1] = center(from);
+      const [x2, y2] = center(to);
+      arrows.push({ from, to, x1, y1, x2, y2 });
+    }
+    for (const { from, to, x1, y1, x2, y2 } of arrows) {
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      // Same source and ray: keep only the farthest endpoint.
+      if (arrows.some(other => {
+        const ox = other.x2 - x1;
+        const oy = other.y2 - y1;
+        return other.from === from && dx * oy === dy * ox && dx * ox + dy * oy > dx * dx + dy * dy;
+      })) continue;
+      group.append(svgElement('line', {
+        x1, y1, x2, y2, 'data-from': from, 'data-to': to,
+        class: 'stalemate-line', 'marker-end': 'url(#stalemate-arrow)'
+      }));
+    }
+    overlayEl.append(group);
+  }
   suggestions.forEach(({ rank, move }) => {
     const [x1, y1] = center(move.slice(0, 2));
     const [x2, y2] = center(move.slice(2, 4));
@@ -200,7 +234,7 @@ function renderOverlay() {
       class: `recommend-badge recommend-${rank}`,
       role: 'button',
       tabindex: '0',
-      'aria-label': `应用${rank === 1 ? '最优' : '次优'} ${move.slice(0, 2)} → ${move.slice(2, 4)}${move[4] ? `，升${pieceNames[move[4]]}` : ''}`
+      'aria-label': `应用${drawMode ? (rank === 1 ? '求和首选' : '求和备选') : (rank === 1 ? '最优' : '次优')} ${move.slice(0, 2)} → ${move.slice(2, 4)}${move[4] ? `，升${pieceNames[move[4]]}` : ''}`
     });
     badge.append(svgElement('circle', { class: 'recommend-badge-hit', cx: badgeX, cy: badgeY, r: 22 }));
     badge.append(svgElement('circle', { cx: badgeX, cy: badgeY, r: 14 }));
@@ -217,8 +251,16 @@ function renderOverlay() {
 }
 
 function renderAnalysis() {
-  aiStatusEl.textContent = aiError || (game.isGameOver() ? '对局结束' : aiBusy ? 'AI 正在分析' : engineName ? `${engineName} · 分析完成` : '等待分析');
+  preferDrawLabelEl.textContent = `${perspective === 'w' ? '白方' : '黑方'}劣势时优先争取和棋`;
   $('retryAnalysis').hidden = !aiError;
+  let probabilities = evaluation;
+  if (game.isCheckmate()) probabilities = { win: game.turn() === 'b' ? 1 : 0, draw: 0, loss: game.turn() === 'w' ? 1 : 0 };
+  else if (game.isDraw()) probabilities = { win: 0, draw: 1, loss: 0 };
+  if (!probabilities) winRateEl.textContent = aiBusy ? '胜率估计：分析中' : '胜率估计：暂无概率';
+  else {
+    const pct = value => `${(value * 100).toFixed(1)}%`;
+    winRateEl.textContent = `白胜 ${pct(probabilities.win)} · 和棋 ${pct(probabilities.draw)} · 黑胜 ${pct(probabilities.loss)}`;
+  }
   const list = $('suggestions');
   list.replaceChildren();
   for (const rank of [1, 2]) {
@@ -226,10 +268,20 @@ function renderAnalysis() {
     const row = document.createElement('div');
     row.className = `suggestion suggestion-${rank}`;
     const title = document.createElement('strong');
-    title.textContent = rank === 1 ? '1 最优' : '2 次优';
+    title.textContent = drawMode ? (rank === 1 ? '1 求和首选' : '2 求和备选') : (rank === 1 ? '1 最优' : '2 次优');
     const text = document.createElement('span');
     text.textContent = candidate ? `${candidate.move.slice(0, 2)} → ${candidate.move.slice(2, 4)}${candidate.move[4] ? `，升${pieceNames[candidate.move[4]]}` : ''}` : aiBusy ? '分析中' : '不可用';
     row.append(title, text);
+    if (candidate) {
+      const apply = document.createElement('button');
+      apply.type = 'button';
+      apply.className = 'text-button apply-suggestion';
+      apply.textContent = '应用';
+      apply.setAttribute('aria-label', `应用${rank === 1 ? '最优' : '次优'}推荐 ${candidate.move.slice(0, 2)} 到 ${candidate.move.slice(2, 4)}`);
+      apply.disabled = game.isGameOver();
+      apply.addEventListener('click', () => applyUci(candidate.move));
+      row.append(apply);
+    }
     list.append(row);
   }
 }
@@ -242,6 +294,8 @@ function cancelAnalysis() {
   aiBusy = false;
   aiError = '';
   suggestions = [];
+  evaluation = null;
+  drawMode = false;
 }
 function scheduleAnalysis() {
   cancelAnalysis();
@@ -252,6 +306,17 @@ function scheduleAnalysis() {
   renderAnalysis();
   renderOverlay();
 }
+function analysisPayload(extra = {}) {
+  const moves = game.history({ verbose: true });
+  return {
+    fen: game.fen(), movetime: 800, preferDraw: preferDrawEl.checked && perspective === game.turn(),
+    history: {
+      startFen: moves[0]?.before || game.fen(),
+      moves: moves.map(move => move.from + move.to + (move.promotion || ''))
+    },
+    ...extra
+  };
+}
 async function analyze() {
   const requestGeneration = generation;
   const fen = game.fen();
@@ -260,7 +325,7 @@ async function analyze() {
   try {
     const response = await fetch('/api/bestmove', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fen, movetime: 800 }), signal: requestController.signal
+      body: JSON.stringify(analysisPayload()), signal: requestController.signal
     });
     const data = await response.json();
     if (requestGeneration !== generation || fen !== game.fen()) return;
@@ -276,7 +341,8 @@ async function analyze() {
     }).sort((a, b) => a.rank - b.rank);
     if (!suggestions.some(item => item.rank === 1) && legal.has(data.bestmove)) suggestions = [{ rank: 1, move: data.bestmove }];
     if (!suggestions.some(item => item.rank === 1)) throw new Error('引擎没有返回合法推荐');
-    engineName = data.engine;
+    evaluation = data.wdl || null;
+    drawMode = data.drawMode === true;
   } catch (error) {
     if (requestGeneration !== generation || error.name === 'AbortError') return;
     aiError = error.message;
@@ -290,13 +356,6 @@ async function analyze() {
   }
 }
 
-function schedulePerspective() {
-  clearTimeout(perspectiveTimer);
-  if (autoFlipEl.checked && !game.isGameOver()) {
-    const turn = game.turn();
-    perspectiveTimer = setTimeout(() => { if (game.turn() === turn) { perspective = turn; render(); } }, 1000);
-  }
-}
 function applyUci(uci) {
   if (!uci || game.isGameOver() || pendingPromotion) return;
   const from = uci.slice(0, 2);
@@ -315,7 +374,6 @@ function commitMove(move) {
   moveSound.cloneNode().play().catch(() => {});
   scheduleAnalysis();
   render();
-  schedulePerspective();
 }
 function onSquare(square) {
   if (game.isGameOver() || pendingPromotion) return;
@@ -330,7 +388,6 @@ function onSquare(square) {
   }
 }
 function openPromotion(from, to) {
-  clearTimeout(perspectiveTimer);
   pendingPromotion = { from, to };
   promotionRecommendation = null;
   const choices = $('promotionChoices');
@@ -390,7 +447,7 @@ async function analyzePromotion(from, to) {
   try {
     const response = await fetch('/api/bestmove', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fen: game.fen(), movetime: 800, searchmoves: moves }),
+      body: JSON.stringify(analysisPayload({ searchmoves: moves })),
       signal: requestController.signal
     });
     const data = await response.json();
@@ -441,9 +498,7 @@ undoMoveEl.addEventListener('click', () => {
   const move = game.undo();
   if (!move) return;
   redoStack.push({ from: move.from, to: move.to, ...(move.promotion ? { promotion: move.promotion } : {}) });
-  clearTimeout(perspectiveTimer);
   selected = hovered = null;
-  if (autoFlipEl.checked) perspective = game.turn();
   scheduleAnalysis();
   render();
 });
@@ -451,15 +506,12 @@ redoMoveEl.addEventListener('click', () => {
   const move = redoStack.pop();
   if (!move) return;
   game.move(move);
-  clearTimeout(perspectiveTimer);
   selected = hovered = null;
-  if (autoFlipEl.checked) perspective = game.turn();
   scheduleAnalysis();
   render();
 });
 $('reset').addEventListener('click', () => {
   cancelPromotion();
-  clearTimeout(perspectiveTimer);
   game.reset();
   selected = hovered = null;
   redoStack.length = 0;
@@ -468,15 +520,14 @@ $('reset').addEventListener('click', () => {
   render();
 });
 $('flipView').addEventListener('click', () => {
-  clearTimeout(perspectiveTimer);
   perspective = perspective === 'w' ? 'b' : 'w';
   hovered = null;
+  if (preferDrawEl.checked) scheduleAnalysis();
   render();
 });
-autoFlipEl.addEventListener('change', () => {
-  clearTimeout(perspectiveTimer);
-  if (autoFlipEl.checked) perspective = game.turn();
-  render();
+preferDrawEl.addEventListener('change', () => {
+  scheduleAnalysis();
+  if (pendingPromotion) analyzePromotion(pendingPromotion.from, pendingPromotion.to);
 });
 for (const id of ['whiteAttacks', 'blackAttacks']) $(id).addEventListener('change', renderOverlay);
 $('retryAnalysis').addEventListener('click', scheduleAnalysis);

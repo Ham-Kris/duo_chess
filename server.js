@@ -145,14 +145,41 @@ function normalizeMovetime(movetime) {
   return Math.max(100, Math.min(5000, Number(movetime) || 800));
 }
 
-function runUciEngine(candidate, fen, movetime, signal, searchMoves = []) {
+function normalizeWdl(values) {
+  if (!values || values.length !== 3 || values.some(value => !Number.isFinite(value) || value < 0)) return null;
+  const total = values.reduce((sum, value) => sum + Math.max(0, value), 0);
+  if (!total) return null;
+  return { win: Math.max(0, values[0]) / total, draw: Math.max(0, values[1]) / total, loss: Math.max(0, values[2]) / total };
+}
+
+function parseWdl(line) {
+  const match = line.match(/\bwdl\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/i);
+  return match ? normalizeWdl(match.slice(1).map(Number)) : null;
+}
+
+function parseMate(line) {
+  const match = line.match(/\bscore\s+mate\s+(-?\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function wdlForMate(mate) {
+  return mate > 0 ? { win: 1, draw: 0, loss: 0 } : { win: 0, draw: 0, loss: 1 };
+}
+
+function whitePerspectiveWdl(fen, wdl) {
+  if (!wdl || fen.split(/\s+/)[1] !== 'b') return wdl;
+  return { win: wdl.loss, draw: wdl.draw, loss: wdl.win };
+}
+
+function runUciEngine(candidate, position, movetime, signal, searchMoves = [], candidateCount = 2) {
   return new Promise((resolve, reject) => {
     const engine = spawn(candidate.command, [], { stdio: ['pipe', 'pipe', 'pipe'] });
     let buffer = '';
     let stderr = '';
     let settled = false;
     const linesByDepth = new Map();
-    const multiPv = Math.min(4, Math.max(2, searchMoves.length || 2));
+    const options = new Set();
+    const multiPv = Math.min(candidateCount, searchMoves.length || candidateCount);
     const safeMovetime = normalizeMovetime(movetime);
     const timeout = setTimeout(() => {
       fail(new Error(`${candidate.name} timed out`));
@@ -179,20 +206,19 @@ function runUciEngine(candidate, fen, movetime, signal, searchMoves = []) {
       if (settled) return;
       settled = true;
       cleanup();
-      const complete = [...linesByDepth.entries()]
-        .sort(([a], [b]) => b - a)
-        .map(([, moves]) => moves)
-        .find(moves => moves.has(1));
-      const suggestions = [{ rank: 1, move: bestmove }];
+      // Match WDL to the actual bestmove, never to a stale root PV.
+      const snapshots = [...linesByDepth.entries()].sort(([a], [b]) => b - a);
+      const complete = snapshots.find(([, moves]) => moves.get(1)?.move === bestmove)?.[1];
+      const primary = complete?.get(1) || { move: bestmove, wdl: null };
+      const suggestions = [{ rank: 1, ...primary }];
       if (complete) {
-        for (const rank of [...complete.keys()].sort((a, b) => a - b)) {
-          const move = complete.get(rank);
-          if (rank !== 1 && move !== bestmove && !suggestions.some(item => item.move === move)) {
-            suggestions.push({ rank, move });
+        for (const [rank, entry] of [...complete.entries()].sort(([a], [b]) => a - b)) {
+          if (rank !== 1 && !suggestions.some(item => item.move === entry.move)) {
+            suggestions.push({ rank, ...entry });
           }
         }
       }
-      resolve({ move: bestmove, suggestions });
+      resolve({ move: bestmove, suggestions, wdl: primary.wdl });
     }
 
     function send(command) {
@@ -200,22 +226,29 @@ function runUciEngine(candidate, fen, movetime, signal, searchMoves = []) {
     }
 
     function readLine(line) {
-      if (line === 'uciok') {
+      if (line.startsWith('option name ')) {
+        const name = line.match(/^option name (.+?) type /)?.[1];
+        if (name) options.add(name);
+      } else if (line === 'uciok') {
         send(`setoption name MultiPV value ${multiPv}`);
+        if (options.has('UCI_ShowWDL')) send('setoption name UCI_ShowWDL value true');
         send('isready');
       } else if (line === 'readyok') {
         send('ucinewgame');
-        send(`position fen ${fen}`);
+        send(position);
         const restriction = searchMoves.length ? ` searchmoves ${searchMoves.join(' ')}` : '';
         send(`go movetime ${safeMovetime}${restriction}`);
       } else if (line.startsWith('info ')) {
         const depth = line.match(/\bdepth\s+(\d+)/);
         const multipv = line.match(/\bmultipv\s+(\d+)\b/);
         const pv = line.match(/\bpv\s+([a-h][1-8][a-h][1-8][qrbn]?)\b/);
-        if (depth && multipv && pv) {
+        if (depth && pv && !/\b(?:lowerbound|upperbound)\b/.test(line)) {
           const level = Number(depth[1]);
           if (!linesByDepth.has(level)) linesByDepth.set(level, new Map());
-          linesByDepth.get(level).set(Number(multipv[1]), pv[1]);
+          const mate = parseMate(line);
+          linesByDepth.get(level).set(multipv ? Number(multipv[1]) : 1, {
+            move: pv[1], mate, wdl: mate === null ? parseWdl(line) : wdlForMate(mate)
+          });
         }
       } else if (line.startsWith('bestmove ')) {
         const move = line.match(/^bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/)?.[1];
@@ -249,12 +282,52 @@ function runUciEngine(candidate, fen, movetime, signal, searchMoves = []) {
   });
 }
 
-async function bestMove(fen, movetime = 800, signal, searchMoves = []) {
+function terminalWdl(chess, color) {
+  if (chess.isCheckmate()) return chess.turn() === color
+    ? { win: 0, draw: 0, loss: 1 } : { win: 1, draw: 0, loss: 0 };
+  if (chess.isDraw()) return { win: 0, draw: 1, loss: 0 };
+  return null;
+}
+
+async function bestMove(chess, position, movetime = 800, signal, searchMoves = [], preferDraw = false) {
   const errors = [];
   for (const candidate of engineCandidates) {
     try {
-      const result = await runUciEngine(candidate, fen, movetime, signal, searchMoves);
-      return { ...result, engine: candidate.name };
+      const result = await runUciEngine(candidate, position, movetime, signal, searchMoves, preferDraw ? 8 : 2);
+      const legalMoves = chess.moves({ verbose: true });
+      const allowed = new Set(searchMoves.length ? searchMoves : legalMoves.map(move => move.from + move.to + (move.promotion || '')));
+      if (!allowed.has(result.move)) throw new Error(`${candidate.name} returned an illegal bestmove`);
+      const candidates = result.suggestions.filter(item => allowed.has(item.move));
+      const color = chess.turn();
+      // Check all immediate endings, including repetition with the real history.
+      for (const move of legalMoves) {
+        const uci = move.from + move.to + (move.promotion || '');
+        if (!allowed.has(uci)) continue;
+        chess.move(move);
+        const outcome = terminalWdl(chess, color);
+        const mate = chess.isCheckmate() ? 1 : null;
+        chess.undo();
+        if (outcome) {
+          const existing = candidates.find(item => item.move === uci);
+          if (existing) Object.assign(existing, { wdl: outcome, mate });
+          else candidates.push({ rank: candidates.length + 1, move: uci, wdl: outcome, mate });
+        }
+      }
+      const baseline = candidates.find(item => item.move === result.move);
+      const wdl = baseline?.wdl || null;
+      const drawMode = preferDraw && !!wdl && wdl.win < 0.2 && wdl.loss > wdl.win;
+      const immediateWin = candidates.find(item => item.mate > 0);
+      let ranked = candidates;
+      if (immediateWin) {
+        ranked = [immediateWin, ...candidates.filter(item => item !== immediateWin)];
+      } else if (drawMode) {
+        // Prefer draws without increasing loss risk or sacrificing more than 2% wins.
+        const safe = candidates.filter(item => item.wdl && item.wdl.loss <= wdl.loss && item.wdl.win >= wdl.win - 0.02)
+          .sort((a, b) => b.wdl.draw - a.wdl.draw || a.wdl.loss - b.wdl.loss || a.rank - b.rank);
+        ranked = [...safe, ...candidates.filter(item => !safe.includes(item))];
+      }
+      const suggestions = ranked.slice(0, 2).map((item, index) => ({ ...item, rank: index + 1 }));
+      return { move: suggestions[0].move, suggestions, wdl: immediateWin?.wdl || wdl, drawMode: drawMode && !immediateWin, engine: candidate.name };
     } catch (error) {
       if (signal?.aborted) throw error;
       errors.push(`${candidate.name}: ${error.message}`);
@@ -358,19 +431,38 @@ const server = http.createServer(async (req, res) => {
     req.on('aborted', () => abortController.abort());
     res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
     try {
-      const { fen, movetime, searchmoves } = await readJson(req);
+      const { fen, movetime, searchmoves, preferDraw, history } = await readJson(req);
       if (typeof fen !== 'string') return sendJson(res, 400, { error: 'Invalid FEN' });
       let chess;
       try { chess = new (await chessModule).Chess(fen); }
       catch { return sendJson(res, 400, { error: 'Invalid FEN' }); }
+      if (preferDraw !== undefined && typeof preferDraw !== 'boolean') return sendJson(res, 400, { error: 'preferDraw 必须是布尔值' });
+      let position = `position fen ${chess.fen()}`;
+      if (history !== undefined) {
+        if (!history || typeof history.startFen !== 'string' || !Array.isArray(history.moves) || history.moves.length > 2000) {
+          return sendJson(res, 400, { error: 'Invalid history' });
+        }
+        try {
+          const replay = new (await chessModule).Chess(history.startFen);
+          for (const move of history.moves) {
+            if (typeof move !== 'string' || !/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(move)) throw new Error();
+            replay.move({ from: move.slice(0, 2), to: move.slice(2, 4), ...(move[4] ? { promotion: move[4] } : {}) });
+          }
+          if (replay.fen() !== chess.fen()) throw new Error();
+          chess = replay;
+          position = `position fen ${new (await chessModule).Chess(history.startFen).fen()}${history.moves.length ? ` moves ${history.moves.join(' ')}` : ''}`;
+        } catch { return sendJson(res, 400, { error: 'Invalid history' }); }
+      }
+      const terminal = terminalWdl(chess, chess.turn());
+      if (terminal) return sendJson(res, 200, { bestmove: null, suggestions: [], engine: null, drawMode: false, wdl: whitePerspectiveWdl(chess.fen(), terminal) });
       const legalMoves = new Set(chess.moves({ verbose: true }).map(move => `${move.from}${move.to}${move.promotion || ''}`));
       const restrictedMoves = Array.isArray(searchmoves)
         ? [...new Set(searchmoves.filter(move => typeof move === 'string' && legalMoves.has(move)))]
         : [];
       if (Array.isArray(searchmoves) && restrictedMoves.length === 0) return sendJson(res, 400, { error: '没有合法的候选着法' });
-      const { move, suggestions, engine } = await bestMove(fen, movetime, abortController.signal, restrictedMoves);
+      const { move, suggestions, engine, wdl, drawMode } = await bestMove(chess, position, movetime, abortController.signal, restrictedMoves, preferDraw === true);
       if (abortController.signal.aborted) return;
-      return sendJson(res, 200, { bestmove: move, suggestions, engine });
+      return sendJson(res, 200, { bestmove: move, suggestions, engine, drawMode, wdl: whitePerspectiveWdl(chess.fen(), wdl) });
     } catch (error) {
       if (abortController.signal.aborted) return;
       return sendJson(res, 500, { error: error.message });

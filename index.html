@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Duo Chess</title>
   <link rel="icon" href="assets/pieces/white-knight.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20260929-6">
+  <link rel="stylesheet" href="styles.css?v=20261004-2">
 </head>
 <body>
   <main class="game-shell">
@@ -37,18 +37,15 @@
         </button>
       </div>
       <button id="reset" class="text-button reset-button" type="button">重新开始</button>
-      <label class="toggle-row">
-        <span>自动翻转视角</span>
-        <input id="autoFlip" type="checkbox">
-      </label>
       <button id="flipView" class="text-button flip-button" type="button">反转视角</button>
+      <label class="toggle-row attack-toggle"><span class="white-attack-label">白方攻击线</span><input id="whiteAttacks" type="checkbox" checked></label>
+      <label class="toggle-row attack-toggle"><span class="black-attack-label">黑方攻击线</span><input id="blackAttacks" type="checkbox" checked></label>
       <section class="assistance" aria-labelledby="assistanceTitle">
         <h3 id="assistanceTitle">AI 辅助对局</h3>
         <div id="suggestions" aria-live="polite"></div>
-        <div class="engine-status" id="aiStatus" role="status">等待分析</div>
+        <div class="win-rate" id="winRate" title="引擎概率估计；强制将死按最佳应对计算，普通局面即使估计为百分百也不保证实际结果" aria-live="polite">胜率估计：暂无概率</div>
         <button id="retryAnalysis" class="text-button" type="button" hidden>重试分析</button>
-        <label class="toggle-row attack-toggle"><span class="white-attack-label">白方攻击线</span><input id="whiteAttacks" type="checkbox" checked></label>
-        <label class="toggle-row attack-toggle"><span class="black-attack-label">黑方攻击线</span><input id="blackAttacks" type="checkbox" checked></label>
+        <label class="toggle-row draw-toggle" title="当视角一方轮到行棋且胜率低于 20%、负率高于胜率时，优先寻找和棋线路"><span id="preferDrawLabel">白方劣势时优先争取和棋</span><input id="preferDraw" type="checkbox"></label>
       </section>
       <section class="account-settings" aria-labelledby="accountTitle">
         <h3 id="accountTitle">访问保护</h3>
@@ -70,6 +67,6 @@
   <div id="promotionPopover" class="promotion-popover" popover="auto" aria-label="选择升变棋子">
     <div id="promotionChoices" class="promotion-choices"></div>
   </div>
-  <script type="module" src="app.js?v=20261001-1"></script>
+  <script type="module" src="app.js?v=20261004-2"></script>
 </body>
 </html>
