@@ -1,9 +1,15 @@
 import { Chess, SQUARES } from './assets/vendor/chess.mjs';
+import { positionPieces, pieceCounts, quantityError, validateSetup } from './assets/setup.mjs';
 
 const files = 'abcdefgh';
 const pieceNames = { p: '兵', r: '车', n: '马', b: '象', q: '后', k: '王' };
 const pieceImage = (color, type) => `assets/pieces/${color === 'w' ? 'white' : 'black'}-${{ p: 'pawn', r: 'rook', n: 'knight', b: 'bishop', q: 'queen', k: 'king' }[type]}.svg`;
 const game = new Chess();
+let startingFen = game.fen();
+let editing = false;
+let draft = {};
+let editTool = 'move';
+let customGame = false;
 let perspective = 'w';
 let selected = null;
 let hovered = null;
@@ -78,6 +84,7 @@ logoutEl.addEventListener('click', async () => {
 });
 
 function statusText() {
+  if (editing) return `编辑棋局 · ${$('setupTurn').value === 'w' ? '白方' : '黑方'}先手`;
   const side = game.turn() === 'w' ? '白方' : '黑方';
   if (game.isCheckmate()) return `${game.turn() === 'w' ? '黑方' : '白方'}将死`;
   if (game.isStalemate()) return '和棋（逼和）';
@@ -89,15 +96,15 @@ function statusText() {
 
 function render() {
   const focusedSquare = document.activeElement?.dataset.square;
-  const legal = selected && !game.isGameOver() ? game.moves({ square: selected, verbose: true }) : [];
-  const last = game.history({ verbose: true }).at(-1);
+  const legal = !editing && selected && !game.isGameOver() ? game.moves({ square: selected, verbose: true }) : [];
+  const last = editing ? null : game.history({ verbose: true }).at(-1);
   const lastSquares = last ? [last.from, last.to] : [];
   if (last?.isKingsideCastle()) lastSquares.push(last.color === 'w' ? 'h1' : 'h8', last.color === 'w' ? 'f1' : 'f8');
   if (last?.isQueensideCastle()) lastSquares.push(last.color === 'w' ? 'a1' : 'a8', last.color === 'w' ? 'd1' : 'd8');
   const order = perspective === 'w' ? [...SQUARES] : [...SQUARES].reverse();
   boardEl.replaceChildren();
   order.forEach((squareName, index) => {
-    const piece = game.get(squareName);
+    const piece = editing ? draft[squareName] : game.get(squareName);
     const square = document.createElement('button');
     const rank = Number(squareName[1]);
     square.className = `square ${(files.indexOf(squareName[0]) + rank) % 2 ? 'light' : 'dark'}`;
@@ -114,7 +121,7 @@ function render() {
       square.classList.toggle('capture', target.isCapture() || target.isEnPassant());
     }
     if (piece) {
-      const checked = piece.type === 'k' && piece.color === game.turn() && game.inCheck();
+      const checked = !editing && piece.type === 'k' && piece.color === game.turn() && game.inCheck();
       const img = document.createElement('img');
       img.className = 'piece' + (checked && !game.isCheckmate() ? ' king-checked' : '');
       img.alt = '';
@@ -142,8 +149,13 @@ function render() {
   });
   if (focusedSquare) boardEl.querySelector(`[data-square="${focusedSquare}"]`)?.focus({ preventScroll: true });
   $('status').textContent = statusText();
-  undoMoveEl.disabled = game.history().length === 0;
-  redoMoveEl.disabled = redoStack.length === 0;
+  undoMoveEl.disabled = editing || game.history().length === 0;
+  redoMoveEl.disabled = editing || redoStack.length === 0;
+  $('reset').disabled = editing;
+  $('setupEditor').hidden = !editing;
+  $('customSetup').hidden = editing;
+  $('standardGame').hidden = editing || !customGame;
+  if (editing) renderEditor();
   renderAnalysis();
   renderOverlay();
 }
@@ -160,6 +172,7 @@ function center(square) {
 }
 function renderOverlay() {
   overlayEl.replaceChildren();
+  if (editing) return;
   const focus = hovered || selected;
   const stalemateColor = game.isStalemate() ? (game.turn() === 'w' ? 'b' : 'w') : null;
   // Stalemate has no legal moves, so use chess.js's pseudo-legal targets to explain the blocked options.
@@ -251,6 +264,7 @@ function renderOverlay() {
 }
 
 function renderAnalysis() {
+  document.querySelector('.assistance').hidden = editing;
   preferDrawLabelEl.textContent = `${perspective === 'w' ? '白方' : '黑方'}劣势时优先争取和棋`;
   $('retryAnalysis').hidden = !aiError;
   let probabilities = evaluation;
@@ -299,7 +313,7 @@ function cancelAnalysis() {
 }
 function scheduleAnalysis() {
   cancelAnalysis();
-  if (!game.isGameOver()) {
+  if (!editing && !game.isGameOver()) {
     aiBusy = true;
     analysisTimer = setTimeout(analyze, 150);
   }
@@ -357,7 +371,7 @@ async function analyze() {
 }
 
 function applyUci(uci) {
-  if (!uci || game.isGameOver() || pendingPromotion) return;
+  if (editing || !uci || game.isGameOver() || pendingPromotion) return;
   const from = uci.slice(0, 2);
   const to = uci.slice(2, 4);
   const promotion = uci[4];
@@ -376,6 +390,7 @@ function commitMove(move) {
   render();
 }
 function onSquare(square) {
+  if (editing) { editSquare(square); return; }
   if (game.isGameOver() || pendingPromotion) return;
   const piece = game.get(square);
   const candidates = selected ? game.moves({ square: selected, verbose: true }).filter(move => move.to === square) : [];
@@ -494,6 +509,7 @@ promotionPopover.addEventListener('keydown', event => {
   }
 });
 undoMoveEl.addEventListener('click', () => {
+  if (editing) return;
   if (pendingPromotion) cancelPromotion();
   const move = game.undo();
   if (!move) return;
@@ -503,6 +519,7 @@ undoMoveEl.addEventListener('click', () => {
   render();
 });
 redoMoveEl.addEventListener('click', () => {
+  if (editing) return;
   const move = redoStack.pop();
   if (!move) return;
   game.move(move);
@@ -511,8 +528,9 @@ redoMoveEl.addEventListener('click', () => {
   render();
 });
 $('reset').addEventListener('click', () => {
+  if (editing) return;
   cancelPromotion();
-  game.reset();
+  game.load(startingFen);
   selected = hovered = null;
   redoStack.length = 0;
   perspective = 'w';
@@ -529,6 +547,118 @@ preferDrawEl.addEventListener('change', () => {
   scheduleAnalysis();
   if (pendingPromotion) analyzePromotion(pendingPromotion.from, pendingPromotion.to);
 });
+function renderEditor() {
+  const palette = $('piecePalette');
+  palette.replaceChildren();
+  for (const color of ['w', 'b']) {
+    const counts = pieceCounts(draft, color);
+    for (const type of ['k', 'q', 'r', 'b', 'n', 'p']) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'palette-piece';
+      button.dataset.piece = color + type;
+      button.setAttribute('aria-label', `${color === 'w' ? '白' : '黑'}${pieceNames[type]}，已放 ${counts[type]} 个`);
+      button.setAttribute('aria-pressed', String(editTool === color + type));
+      const image = document.createElement('img');
+      image.src = pieceImage(color, type);
+      image.alt = '';
+      const count = document.createElement('span');
+      count.textContent = `${pieceNames[type]} ${counts[type]}`;
+      button.append(image, count);
+      button.addEventListener('click', () => chooseEditTool(color + type));
+      palette.append(button);
+    }
+  }
+  $('movePiece').setAttribute('aria-pressed', String(editTool === 'move'));
+  $('erasePiece').setAttribute('aria-pressed', String(editTool === 'erase'));
+}
+
+function chooseEditTool(tool) {
+  editTool = tool;
+  selected = hovered = null;
+  $('setupMessage').textContent = '';
+  render();
+}
+
+function editSquare(square) {
+  const next = { ...draft };
+  if (editTool === 'erase') {
+    delete next[square];
+  } else if (editTool === 'move') {
+    if (!selected || selected === square) {
+      selected = selected === square ? null : draft[square] ? square : null;
+      render();
+      return;
+    }
+    next[square] = next[selected];
+    delete next[selected];
+  } else {
+    next[square] = { color: editTool[0], type: editTool[1] };
+  }
+  // Removal stays available even when editing an imported position above the limits.
+  const error = editTool === 'erase' ? '' : quantityError(next);
+  if (error) { $('setupMessage').textContent = error; return; }
+  draft = next;
+  selected = hovered = null;
+  $('setupMessage').textContent = '';
+  render();
+}
+
+$('customSetup').addEventListener('click', () => {
+  cancelPromotion();
+  cancelAnalysis();
+  draft = positionPieces(game);
+  editing = true;
+  editTool = 'move';
+  selected = hovered = null;
+  $('setupTurn').value = 'w';
+  $('setupMessage').textContent = '';
+  render();
+});
+$('movePiece').addEventListener('click', () => chooseEditTool('move'));
+$('erasePiece').addEventListener('click', () => chooseEditTool('erase'));
+$('clearSetup').addEventListener('click', () => {
+  draft = {};
+  chooseEditTool(editTool);
+});
+$('standardSetup').addEventListener('click', () => {
+  draft = positionPieces(new Chess());
+  chooseEditTool('move');
+});
+$('setupTurn').addEventListener('change', () => {
+  $('setupMessage').textContent = '';
+  render();
+});
+$('cancelSetup').addEventListener('click', () => {
+  editing = false;
+  selected = hovered = null;
+  scheduleAnalysis();
+  render();
+});
+$('startSetup').addEventListener('click', () => {
+  const result = validateSetup(draft, $('setupTurn').value);
+  if (result.error) { $('setupMessage').textContent = result.error; return; }
+  startingFen = result.fen;
+  game.load(startingFen);
+  customGame = true;
+  editing = false;
+  redoStack.length = 0;
+  selected = hovered = null;
+  scheduleAnalysis();
+  render();
+});
+$('standardGame').addEventListener('click', () => {
+  cancelPromotion();
+  game.reset();
+  startingFen = game.fen();
+  customGame = false;
+  redoStack.length = 0;
+  selected = hovered = null;
+  perspective = 'w';
+  scheduleAnalysis();
+  render();
+});
+
 for (const id of ['whiteAttacks', 'blackAttacks']) $(id).addEventListener('change', renderOverlay);
 $('retryAnalysis').addEventListener('click', scheduleAnalysis);
 window.addEventListener('pagehide', cancelAnalysis);

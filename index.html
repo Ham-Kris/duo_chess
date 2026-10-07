@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Duo Chess</title>
   <link rel="icon" href="assets/pieces/white-knight.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20261004-2">
+  <link rel="stylesheet" href="styles.css?v=20261007-3">
 </head>
 <body>
   <main class="game-shell">
@@ -24,6 +24,26 @@
     </section>
     <aside class="side-panel" aria-label="对局设置">
       <h2>对局设置</h2>
+      <button id="customSetup" class="text-button setup-entry" type="button">自定义棋局</button>
+      <section id="setupEditor" class="setup-editor" aria-label="编辑棋局" hidden>
+        <p class="setup-hint">选择棋子后点击格子放置；使用移动工具调整位置。</p>
+        <div id="piecePalette" class="piece-palette" aria-label="选择摆放棋子"></div>
+        <div class="setup-actions">
+          <button id="movePiece" class="text-button" type="button" aria-pressed="true">移动</button>
+          <button id="erasePiece" class="text-button" type="button" aria-pressed="false">删除</button>
+          <button id="clearSetup" class="text-button" type="button">清空棋盘</button>
+          <button id="standardSetup" class="text-button" type="button">标准摆法</button>
+        </div>
+        <label class="field-label" for="setupTurn">谁先手</label>
+        <select id="setupTurn" class="text-input"><option value="w">白方先手</option><option value="b">黑方先手</option></select>
+        <p class="setup-hint">额外的后、车、象、马共用升变额度，每少一个兵可多放一个。自定义开局无王车易位和吃过路兵权。</p>
+        <div id="setupMessage" class="setup-message" role="status" aria-live="polite"></div>
+        <div class="setup-actions">
+          <button id="startSetup" class="text-button" type="button">开始对局</button>
+          <button id="cancelSetup" class="text-button" type="button">取消编辑</button>
+        </div>
+      </section>
+      <button id="standardGame" class="text-button setup-entry" type="button" hidden>标准新局</button>
       <div class="history-controls" aria-label="棋步历史">
         <button id="undoMove" class="icon-button" type="button" aria-label="撤销一步" title="撤销一步" disabled>
           <svg class="history-icon" viewBox="0 0 1170 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -67,6 +87,6 @@
   <div id="promotionPopover" class="promotion-popover" popover="auto" aria-label="选择升变棋子">
     <div id="promotionChoices" class="promotion-choices"></div>
   </div>
-  <script type="module" src="app.js?v=20261004-2"></script>
+  <script type="module" src="app.js?v=20261004-3"></script>
 </body>
 </html>

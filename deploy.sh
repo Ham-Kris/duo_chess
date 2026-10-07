@@ -127,12 +127,15 @@ done
 node --check server.js
 node --test auth.test.js
 
-temporary=$(mktemp -d "${TMPDIR:-/tmp}/duo-chess-deploy.XXXXXXXX")
+temporary=$(mktemp -d /tmp/duo-chess-deploy.XXXXXXXX)
 trap 'rm -rf -- "$temporary"' EXIT
 release="duo-chess-$(date +%Y%m%dT%H%M%S)-$$"
 archive="$temporary/$release.tar.gz"
 remote_archive="/tmp/$release.tar.gz"
 remote_script="/tmp/$release.sh"
+control_path="$temporary/ssh-control"
+ssh_options=(-o ForwardAgent=no -o IdentitiesOnly=yes -o ControlMaster=auto
+  -o ControlPersist=60 -o "ControlPath=$control_path")
 
 # An allowlist prevents credentials and local inspection artifacts from shipping.
 tar_options=()
@@ -149,7 +152,8 @@ else
 fi
 checksum=${checksum%% *}
 echo "Uploading to $host..."
-scp -o ForwardAgent=no "$archive" "$host:$remote_archive"
-scp -o ForwardAgent=no "$root/deploy.sh" "$host:$remote_script"
+ssh -tt "${ssh_options[@]}" "$host" 'true'
+ssh "${ssh_options[@]}" "$host" "cat > '$remote_archive'" < "$archive"
+ssh "${ssh_options[@]}" "$host" "cat > '$remote_script'" < "$root/deploy.sh"
 echo 'Starting deployment over interactive SSH...'
-ssh -tt -o ForwardAgent=no "$host" "bash '$remote_script' --remote '$remote_archive' '$checksum'"
+ssh -tt "${ssh_options[@]}" "$host" "bash '$remote_script' --remote '$remote_archive' '$checksum'"
