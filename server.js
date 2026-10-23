@@ -315,19 +315,19 @@ async function bestMove(chess, position, movetime = 800, signal, searchMoves = [
       }
       const baseline = candidates.find(item => item.move === result.move);
       const wdl = baseline?.wdl || null;
-      const drawMode = preferDraw && !!wdl && wdl.win < 0.2 && wdl.loss > wdl.win;
+      const drawMode = preferDraw && !!wdl && wdl.loss > wdl.win;
       const immediateWin = candidates.find(item => item.mate > 0);
       let ranked = candidates;
       if (immediateWin) {
         ranked = [immediateWin, ...candidates.filter(item => item !== immediateWin)];
       } else if (drawMode) {
-        // Prefer draws without increasing loss risk or sacrificing more than 2% wins.
-        const safe = candidates.filter(item => item.wdl && item.wdl.loss <= wdl.loss && item.wdl.win >= wdl.win - 0.02)
+        // Accept fewer wins for more draws, without increasing loss risk.
+        const safe = candidates.filter(item => item.wdl && item.wdl.loss <= wdl.loss)
           .sort((a, b) => b.wdl.draw - a.wdl.draw || a.wdl.loss - b.wdl.loss || a.rank - b.rank);
         ranked = [...safe, ...candidates.filter(item => !safe.includes(item))];
       }
       const suggestions = ranked.slice(0, 2).map((item, index) => ({ ...item, rank: index + 1 }));
-      return { move: suggestions[0].move, suggestions, wdl: immediateWin?.wdl || wdl, drawMode: drawMode && !immediateWin, engine: candidate.name };
+      return { move: suggestions[0].move, suggestions, wdl: suggestions[0].wdl || null, drawMode: drawMode && !immediateWin, engine: candidate.name };
     } catch (error) {
       if (signal?.aborted) throw error;
       errors.push(`${candidate.name}: ${error.message}`);

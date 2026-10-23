@@ -1,5 +1,6 @@
 import { Chess, SQUARES } from './assets/vendor/chess.mjs';
 import { positionPieces, pieceCounts, quantityError, validateSetup } from './assets/setup.mjs';
+import { checkmateAttacks } from './assets/checkmate.mjs?v=20261023-2';
 
 const files = 'abcdefgh';
 const pieceNames = { p: '兵', r: '车', n: '马', b: '象', q: '后', k: '王' };
@@ -174,13 +175,14 @@ function renderOverlay() {
   overlayEl.replaceChildren();
   if (editing) return;
   const focus = hovered || selected;
+  const checkmateLines = checkmateAttacks(game);
   const stalemateColor = game.isStalemate() ? (game.turn() === 'w' ? 'b' : 'w') : null;
   // Stalemate has no legal moves, so use chess.js's pseudo-legal targets to explain the blocked options.
   const stalemateTargets = stalemateColor
     ? new Set(game._moves({ legal: false }).map(move => `${files[move.to & 7]}${8 - (move.to >> 4)}`))
     : null;
   for (const color of ['w', 'b']) {
-    if (stalemateColor) continue;
+    if (stalemateColor || checkmateLines.length) continue;
     if (!$(color === 'w' ? 'whiteAttacks' : 'blackAttacks').checked) continue;
     const group = svgElement('g', { class: `attack-group attack-${color}`, 'aria-hidden': 'true' });
     for (const to of SQUARES) {
@@ -202,6 +204,9 @@ function renderOverlay() {
   const stalemateMarker = svgElement('marker', { id: 'stalemate-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 3.5, markerHeight: 3.5, orient: 'auto' });
   stalemateMarker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: 'stalemate-fill' }));
   defs.append(stalemateMarker);
+  const checkmateMarker = svgElement('marker', { id: 'checkmate-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 3.5, markerHeight: 3.5, orient: 'auto' });
+  checkmateMarker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: 'checkmate-fill' }));
+  defs.append(checkmateMarker);
   for (const rank of [1, 2]) {
     const marker = svgElement('marker', { id: `recommend-arrow-${rank}`, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 3, markerHeight: 3, orient: 'auto-start-reverse' });
     marker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: `recommend-fill recommend-${rank}` }));
@@ -228,6 +233,18 @@ function renderOverlay() {
       group.append(svgElement('line', {
         x1, y1, x2, y2, 'data-from': from, 'data-to': to,
         class: 'stalemate-line', 'marker-end': 'url(#stalemate-arrow)'
+      }));
+    }
+    overlayEl.append(group);
+  }
+  if (checkmateLines.length) {
+    const group = svgElement('g', { class: 'checkmate-attacks', 'aria-hidden': 'true' });
+    for (const { from, to } of checkmateLines) {
+      const [x1, y1] = center(from);
+      const [x2, y2] = center(to);
+      group.append(svgElement('line', {
+        x1, y1, x2, y2, 'data-from': from, 'data-to': to,
+        class: 'checkmate-line', 'marker-end': 'url(#checkmate-arrow)'
       }));
     }
     overlayEl.append(group);

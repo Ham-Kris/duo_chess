@@ -143,7 +143,7 @@ h1 { margin: 0 0 28px 14px; font-size: 34px; letter-spacing: 0; }
 .text-button { height: 42px; padding: 0 14px; border-radius: 10px; font-size: 13px; font-weight: 800; }
 
 [hidden] { display: none !important; }
-:root { --white-attack: #4eaff4; --black-attack: #ee83aa; --stalemate: #ffd447; --best: #58cc02; --second: #ffc447; }
+:root { --white-attack: #4eaff4; --black-attack: #ee83aa; --stalemate: #ffd447; --checkmate: #ef4444; --best: #58cc02; --second: #ffc447; }
 @media (prefers-color-scheme: light) {
   :root { --white-attack: #1478b9; --black-attack: #ba386e; --stalemate: #b17600; --best: #328300; --second: #996600; }
 }
@@ -164,6 +164,9 @@ h1 { margin: 0 0 28px 14px; font-size: 34px; letter-spacing: 0; }
 .stalemate-attacks { color: var(--stalemate); }
 .stalemate-line { stroke: currentColor; stroke-width: 4.5; opacity: .92; marker-end: url(#stalemate-arrow); }
 .stalemate-fill { fill: var(--stalemate); }
+.checkmate-attacks { color: var(--checkmate); }
+.checkmate-line { stroke: currentColor; stroke-width: 4.5; stroke-dasharray: none; opacity: .92; }
+.checkmate-fill { fill: var(--checkmate); }
 .recommend-1 { color: var(--best); }
 .recommend-2 { color: var(--second); }
 .recommend-line { stroke: currentColor; stroke-width: 7; opacity: .9; }
